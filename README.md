@@ -2,6 +2,9 @@
 
 A local cybersecurity reading workspace for collecting research articles, building focused reading queues, and keeping notes beside the full article.
 
+<img width="1261" height="1176" alt="image" src="https://github.com/user-attachments/assets/0df31668-9b5e-4684-b4e5-580e9c071525" />
+
+
 ## Run locally
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
