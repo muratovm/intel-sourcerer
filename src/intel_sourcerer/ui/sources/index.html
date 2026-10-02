@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="csrf-token" content="${csrf_token}" />
+    <script src="/sources.js" defer></script>
+    <title>Sources · Intel Sourcerer</title>
+    <link rel="stylesheet" href="/reader.css" />
+  </head>
+  <body>
+    <main class="sources-page">
+      <header class="builder-header">
+        <div class="brand">
+          <img class="brand-icon" src="/brand-icon.png" alt="" />Intel Sourcerer
+        </div>
+        <nav class="builder-links" aria-label="Main navigation">
+          <a href="/">Home</a><a href="/?view=builder">Queue builder</a
+          ><a href="/library">Library</a
+          ><a href="/sources" class="active" aria-current="page">Sources</a
+          ><a href="/stats">Stats</a>
+        </nav>
+      </header>
+      <h1>Sources</h1>
+      <p class="muted">
+        ${source_count} configured sources ·
+        ${enabled_count} enabled
+      </p>
+      <p class="muted">Configuration: ${config_path}</p>
+      ${source_groups}
+    </main>
+  </body>
+</html>

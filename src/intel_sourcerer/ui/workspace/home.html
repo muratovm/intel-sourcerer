@@ -1,0 +1,43 @@
+    <main id="home" class="home-page" hidden>
+      <header class="builder-header">
+        <div class="brand">
+          <img class="brand-icon" src="/brand-icon.png" alt="" />Intel Sourcerer
+        </div>
+        <nav class="builder-links" aria-label="Main navigation">
+          <time id="home-date" class="muted"></time
+          ><a href="/" class="active" aria-current="page">Home</a
+          ><a href="/?view=builder">Queue builder</a
+          ><a href="/library">Library</a><a href="/sources">Sources</a
+          ><a href="/stats">Stats</a>
+        </nav>
+      </header>
+      <div class="home-content">
+        <div class="home-columns">
+          <section class="home-session">
+            <h1>Pick up where you left off</h1>
+            <p class="eyebrow">CURRENT READING SESSION</p>
+            <div id="home-current"></div>
+            <p id="home-progress-text" class="muted"></p>
+            <progress
+              id="home-progress"
+              class="queue-progress"
+              max="1"
+              value="0"
+            ></progress
+            ><button id="resume-reading" class="primary">Resume reading</button>
+          </section>
+          <aside class="home-fresh">
+            <h2>Start a fresh session</h2>
+            <p class="muted">
+              Build a focused reading queue from the latest cybersecurity
+              research and intelligence.
+            </p>
+            <button id="home-build">Build a new queue</button>
+          </aside>
+        </div>
+        <section class="home-notes">
+          <h2>Recent notes</h2>
+          <div id="recent-notes"></div>
+        </section>
+      </div>
+    </main>

@@ -1,0 +1,19 @@
+<div class="lib-detail-heading">
+  <span>YOUR NOTES</span><span>${edited}</span>
+</div>
+<h2>${title}</h2>
+<p class="muted">
+  ${publisher} · ${published_date}
+</p>
+<div class="lib-actions">
+  <a class="lib-open" href="${opened}">Open article</a
+  ><a href="${exported}" download="article-notes.md">Export Markdown</a
+  ><button
+    class="lib-delete"
+    type="button"
+    data-url="${url}"
+  >
+    Delete article
+  </button>
+</div>
+<div class="lib-note-content">${notes}</div>

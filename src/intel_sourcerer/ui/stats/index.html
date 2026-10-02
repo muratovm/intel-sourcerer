@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Reading stats · Intel Sourcerer</title>
+    <link rel="stylesheet" href="/reader.css" />
+  </head>
+  <body>
+    <main class="stats-page">
+      <header class="builder-header">
+        <div class="brand">
+          <img class="brand-icon" src="/brand-icon.png" alt="" />Intel Sourcerer
+        </div>
+        <nav class="builder-links" aria-label="Main navigation">
+          <a href="/">Home</a><a href="/?view=builder">Queue builder</a
+          ><a href="/library">Library</a><a href="/sources">Sources</a
+          ><a href="/stats" class="active" aria-current="page">Stats</a>
+        </nav>
+      </header>
+      <div class="stats-content">
+        <h1>Your reading year · ${today_year}</h1>
+        <p class="muted">
+          ${total} articles read · ${active_days} active days · America/Toronto
+        </p>
+        <div class="heat-scroll">
+          <div class="heat-months">${month_labels}</div>
+          <div class="heat-layout">
+            <div class="heat-weekdays">
+              <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span
+              ><span>Fri</span><span>Sat</span><span>Sun</span>
+            </div>
+            <div
+              class="heat-grid"
+              role="group"
+              aria-label="Daily articles read in ${today_year2}"
+            >
+              ${day_cells}
+            </div>
+          </div>
+        </div>
+        <div class="heat-legend">
+          Less <span class="heat-day level-0"></span
+          ><span class="heat-day level-1"></span
+          ><span class="heat-day level-2"></span
+          ><span class="heat-day level-3"></span
+          ><span class="heat-day level-4"></span> More
+        </div>
+        <p class="muted">
+          Each article counts once, on the day you first mark it read. Changing
+          its read status later does not erase that reading activity. Hover or
+          focus a day to see its count.
+        </p>
+        <p class="muted">
+          ${undated} previously read articles have no recorded read date and are
+          excluded from the heatmap.
+        </p>
+      </div>
+    </main>
+  </body>
+</html>

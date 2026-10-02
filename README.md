@@ -95,3 +95,7 @@ To restore a snapshot:
 4. Restart the server and check your articles and notes. Restoring also restores queues and read history to the snapshot date.
 
 Browser-local unsaved note drafts may conflict with restored notes. Preserve any draft you want to keep before dismissing a conflict.
+
+## Editing the UI
+
+Page layouts and their JavaScript live together under `src/intel_sourcerer/ui/`. See [the UI guide](src/intel_sourcerer/ui/README.md) for the file map and rendering conventions. The shared stylesheet is `ui/shared/styles.css`.

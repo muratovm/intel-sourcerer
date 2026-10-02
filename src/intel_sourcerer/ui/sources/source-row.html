@@ -1,0 +1,18 @@
+<article class="source-card">
+  <div class="source-heading">
+    <h3>${source_name}</h3>
+    <label class="source-toggle"
+      ><input
+        type="checkbox"
+        data-source="${source_id}"
+        aria-label="Enable ${source_name}"
+        ${checked_attribute}
+      />
+      <span class="source-status ${status_class}">${status}</span></label
+    >
+  </div>
+  <p class="muted">${source_id}</p>
+  <p class="source-links">${source_links}</p>
+  <p class="source-url">${source_parent_url}</p>
+  <p class="muted">${source_notes}</p>
+</article>

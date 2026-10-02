@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="csrf-token" content="__TOKEN__" />
+    <title>Intel Sourcerer</title>
+    <link rel="stylesheet" href="/reader.css" />
+    <script src="/reader.js" defer></script>
+  </head>
+  <body>
+    <div id="notice" role="alert" hidden></div>
+    <!-- include: workspace/home.html -->
+    <!-- include: workspace/queue-builder.html -->
+    <!-- include: workspace/reading.html -->
+    <div id="complete" class="completion-overlay" hidden>
+      <section
+        class="completion-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="completion-title"
+      >
+        <div class="brand">
+          <img class="brand-icon" src="/brand-icon.png" alt="" />Intel Sourcerer
+        </div>
+        <p class="eyebrow">QUEUE FINISHED</p>
+        <h1 id="completion-title">That’s your queue.</h1>
+        <p id="completion-count" class="muted"></p>
+        <p class="muted">
+          Your notes are saved. Take a break, or choose your next reads.
+        </p>
+        <button id="new-queue" class="primary">Create new queue</button>
+      </section>
+    </div>
+  </body>
+</html>

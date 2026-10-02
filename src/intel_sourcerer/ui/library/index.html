@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="csrf-token" content="${csrf_token}" />
+    <script src="/library.js" defer></script>
+    <title>Library · Intel Sourcerer</title>
+    <link rel="stylesheet" href="/reader.css" />
+  </head>
+  <body>
+    <main class="library-page">
+      <header class="builder-header">
+        <div class="brand">
+          <img class="brand-icon" src="/brand-icon.png" alt="" />Intel Sourcerer
+        </div>
+        <nav class="builder-links" aria-label="Main navigation">
+          <a href="/">Home</a><a href="/?view=builder">Queue builder</a
+          ><a class="active" aria-current="page" href="/library">Library</a
+          ><a href="/sources">Sources</a><a href="/stats">Stats</a>
+        </nav>
+      </header>
+      <div class="lib-title-row">
+        <h1>Library</h1>
+        <section
+          id="library-drop"
+          class="lib-drop"
+          aria-label="Add article links"
+        >
+          <span>Drop an article link here</span>
+          <form id="library-add-form">
+            <label class="sr-only" for="library-url">Article URL</label
+            ><input
+              id="library-url"
+              type="url"
+              placeholder="Or paste an article URL"
+              required
+            /><button id="library-add" type="submit">Add article</button>
+          </form>
+        </section>
+      </div>
+      <p id="library-feedback" role="status" hidden></p>
+      <form action="/library" class="lib-search">
+        <label class="sr-only" for="query">Search articles and notes</label
+        ><input
+          type="search"
+          id="query"
+          name="q"
+          value="${query}"
+          placeholder="Search articles and notes"
+        /><input
+          type="hidden"
+          name="notes"
+          value="${notes_filter}"
+        /><button type="submit">Search</button>
+      </form>
+      <nav class="lib-tabs" aria-label="Library filters">
+        <a class="${all_tab_class}" href="${all_link}"
+          >All articles</a
+        ><a class="${notes_tab_class}" href="${notes_link}"
+          >With notes</a
+        ><span>${article_count} articles</span>
+      </nav>
+      <div class="lib-workspace">
+        <section class="lib-list" aria-label="Saved articles">
+          ${article_rows}
+        </section>
+        <section class="lib-detail" aria-label="Notes preview">
+          ${detail}
+        </section>
+      </div>
+    </main>
+    <dialog
+      id="delete-dialog"
+      class="lib-dialog"
+      aria-labelledby="delete-title"
+      aria-describedby="delete-description"
+    >
+      <h2 id="delete-title">Delete this article?</h2>
+      <p id="delete-description">
+        The saved article and its notes will be deleted. It will also be removed
+        from reading queues and read history.
+      </p>
+      <p id="delete-error" role="alert" hidden></p>
+      <div class="lib-dialog-actions">
+        <button id="cancel-delete" type="button" autofocus>Cancel</button
+        ><button id="confirm-delete" class="danger" type="button">
+          Delete article
+        </button>
+      </div>
+    </dialog>
+  </body>
+</html>
