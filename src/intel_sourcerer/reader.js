@@ -1,5 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
+let standaloneURL=null;
 let state, currentArticle, noteModel, timer, saving = Promise.resolve(), busy = false;
 const token = document.querySelector('meta[name="csrf-token"]').content;
 function notice(message) { $('notice').textContent = message; $('notice').hidden = !message; }
@@ -11,8 +12,8 @@ async function api(path, data) {
 }
 function dateLabel(date) { return new Intl.DateTimeFormat('en-CA',{month:'short',day:'numeric',year:'numeric',timeZone:'America/Toronto'}).format(new Date(date)); }
 function show(view) { $('setup').inert=false; for (const id of ['home','setup','reader','complete']) $(id).hidden = id !== view; }
-function queueKey() { return `intel-scroll:${state.queue.id}:${currentArticle.url}`; }
-function stashScroll() { if(currentArticle && state?.queue) { try{localStorage.setItem(queueKey(),String($('article-pane').scrollTop));}catch{} } }
+function queueKey() { return `intel-scroll:${standaloneURL?'standalone':state.queue.id}:${currentArticle.url}`; }
+function stashScroll() { if(currentArticle && (standaloneURL || state?.queue)) { try{localStorage.setItem(queueKey(),String($('article-pane').scrollTop));}catch{} } }
 function draftKey(url) { return `intel-draft:${url}`; }
 function stashDraft() { if(noteModel) { try{localStorage.setItem(draftKey(noteModel.url),JSON.stringify({text:notesText(),format:'html',revision:noteModel.revision}));}catch{} } }
 function setBusy(value) { busy=value; $('notes').contentEditable=String(!value); document.querySelectorAll('[data-format]').forEach(b=>b.disabled=value); $('quote-selection').disabled=value; document.querySelectorAll('[data-action]').forEach(b => b.disabled=value || (b.dataset.action === 'previous' && state?.queue?.cursor===0)); }
@@ -32,11 +33,11 @@ function renderHome(){
   $('home-progress-text').textContent=q?`${q.read_count} of ${q.items.length} articles read · ${Math.round(q.read_count/q.items.length*100)}%`:'Choose a few articles to start your queue.';
   $('home-progress').hidden=!q;$('home-progress').max=q?.items.length||1;$('home-progress').value=q?.read_count||0;
   $('resume-reading').hidden=!active;
-  $('recent-notes').replaceChildren();const noted=state.articles.filter(a=>a.has_notes).slice(0,5);
+  $('recent-notes').replaceChildren();const noted=state.articles.filter(a=>a.has_notes).sort((a,b)=>(b.notes_updated_at||'').localeCompare(a.notes_updated_at||'')).slice(0,5);
   if(!noted.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='Your saved takeaways will appear here as you read and take notes.';$('recent-notes').append(empty);}
-  for(const article of noted){const row=document.createElement('article');row.className='home-note';const source=document.createElement('div'),publisher=document.createElement('strong'),date=document.createElement('p'),copy=document.createElement('div'),link=document.createElement('button'),preview=document.createElement('p');publisher.textContent=article.publisher;date.textContent=dateLabel(article.published_at);date.className='muted';source.append(publisher,date);link.className='note-article-link';link.textContent=article.title;link.onclick=async()=>{link.disabled=true;try{state.queue=await api('/api/queue',{urls:[article.url]});await renderQueue();}catch(error){notice(error.message);link.disabled=false;}};preview.textContent=article.note_preview;preview.className='muted';copy.append(link,preview);row.append(source,copy);$('recent-notes').append(row);}
+  for(const article of noted){const row=document.createElement('article');row.className='home-note';const source=document.createElement('div'),publisher=document.createElement('strong'),date=document.createElement('p'),copy=document.createElement('div'),link=document.createElement('button'),preview=document.createElement('p');publisher.textContent=article.publisher;date.textContent=dateLabel(article.published_at);date.className='muted';source.append(publisher,date);link.className='note-article-link';link.textContent=article.title;link.onclick=async()=>{link.disabled=true;try{standaloneURL=article.url;await renderQueue();}catch(error){notice(error.message);link.disabled=false;}};preview.textContent=article.note_preview;preview.className='muted';copy.append(link,preview);row.append(source,copy);$('recent-notes').append(row);}
 }
-$('home-build').onclick=()=>renderSetup();$('resume-reading').onclick=()=>renderQueue().catch(error=>notice(error.message));
+$('home-build').onclick=()=>renderSetup();$('resume-reading').onclick=()=>{standaloneURL=null;renderQueue().catch(error=>notice(error.message));};
 function buildMeta(article){return `${article.publisher} · ${dateLabel(article.published_at)} · ${article.is_read?'Read':'Unread'}${article.has_notes?' · Notted':''}`;}
 function styleArticleStatus(meta,article){
   const publisher=document.createElement('span');publisher.className='article-source';publisher.textContent=article.publisher;
@@ -69,9 +70,9 @@ $('link-form').onsubmit=event=>{event.preventDefault();importLinks($('article-ur
 $('link-drop').addEventListener('dragover',event=>{event.preventDefault();$('link-drop').classList.add('drag-over');});
 $('link-drop').addEventListener('dragleave',()=>$('link-drop').classList.remove('drag-over'));
 $('link-drop').addEventListener('drop',event=>{event.preventDefault();$('link-drop').classList.remove('drag-over');importLinks(event.dataTransfer.getData('text/uri-list')||event.dataTransfer.getData('text/plain'));});
-$('queue-form').onsubmit=async event=>{event.preventDefault();$('start').disabled=true;notice('');try{state.queue=await api('/api/queue',{urls:draftQueue});draftQueue=[];saveQueueDraft();await renderQueue();}catch(error){notice(error.message);$('start').disabled=false;}};
+$('queue-form').onsubmit=async event=>{event.preventDefault();$('start').disabled=true;notice('');try{standaloneURL=null;state.queue=await api('/api/queue',{urls:draftQueue});draftQueue=[];saveQueueDraft();await renderQueue();}catch(error){notice(error.message);$('start').disabled=false;}};
 async function renderQueue(){
-  const q=state.queue;
+  const q=standaloneURL?{id:'standalone',items:[{url:standaloneURL}],cursor:0,read_count:0}:state.queue;
   if(!q){renderSetup();return;}
   if(q.finished){currentArticle=null;noteModel=null;renderSetup();$('complete').hidden=false;$('setup').inert=true;$('new-queue').focus();$('completion-count').textContent=`${q.read_count} of ${q.items.length} articles marked read. ${q.items.length-q.read_count} remain unread.`;return;}
   const item=q.items[q.cursor];
@@ -94,6 +95,8 @@ async function renderQueue(){
   document.querySelector('[data-action="next"]').textContent=q.cursor===q.items.length-1?'Finish':'Next';
   $('mark-unread').hidden=!article.is_read;
   show('reader'); setBusy(false);
+  document.querySelectorAll('[data-action=previous],[data-action=next],[data-action=mark_next],[data-action=unread],.nav-bar .up-next,.nav-bar .progress-area').forEach(el=>el.hidden=!!standaloneURL);
+  $('mark-unread').hidden=!!standaloneURL || !article.is_read;
   let scroll=0;try{scroll=Number(localStorage.getItem(queueKey()))||0;}catch{}
   $('article-pane').scrollTop=scroll;
   if(text!==article.notes && noteModel.revision===article.notes_revision)timer=setTimeout(()=>saveNow().catch(e=>notice(e.message)),600);
@@ -119,7 +122,7 @@ $('article-pane').addEventListener('scroll',stashScroll,{passive:true});
 window.addEventListener('beforeunload',event=>{stashDraft();if(noteModel && notesText()!==noteModel.savedText){event.preventDefault();event.returnValue='';}});
 document.querySelectorAll('[data-action]').forEach(button=>button.onclick=async()=>{
   if(busy)return;setBusy(true);notice('');stashScroll();
-  try{await saveNow();if(button.dataset.action==='home'){state=await api('/api/state');renderHome();setBusy(false);return;}if(button.dataset.action==='exit'){state=await api('/api/state');draftQueue=state.queue.items.map(item=>item.url);saveQueueDraft();currentArticle=null;noteModel=null;selectedPassage='';selectedPassageHTML='';renderSetup();setBusy(false);return;}state.queue=await api('/api/navigate',{queue_id:state.queue.id,cursor:state.queue.cursor,action:button.dataset.action});await renderQueue();}
+  try{await saveNow();if(button.dataset.action==='home'){standaloneURL=null;state=await api('/api/state');renderHome();setBusy(false);return;}if(button.dataset.action==='exit'){const wasStandalone=!!standaloneURL;standaloneURL=null;state=await api('/api/state');if(!wasStandalone&&state.queue){draftQueue=state.queue.items.map(item=>item.url);saveQueueDraft();}currentArticle=null;noteModel=null;selectedPassage='';selectedPassageHTML='';renderSetup();setBusy(false);return;}state.queue=await api('/api/navigate',{queue_id:state.queue.id,cursor:state.queue.cursor,action:button.dataset.action});await renderQueue();}
   catch(error){notice(error.message);setBusy(false);}
 });
 let selectedPassage='', selectedPassageHTML='';
@@ -140,7 +143,7 @@ $('quote-selection').onclick=()=>{if(!selectedPassage){notice('Select a passage 
 
 document.addEventListener('keydown',event=>{if($('complete').hidden)return;if(event.key==='Escape'){event.preventDefault();$('complete').hidden=true;$('setup').inert=false;$('article-type').focus();}else if(event.key==='Tab'){event.preventDefault();$('new-queue').focus();}});
 $('new-queue').onclick=async()=>{try{state=await api('/api/state');renderSetup();}catch(error){notice(error.message);}};
-(async()=>{try{state=await api('/api/state');const view=new URLSearchParams(location.search).get('view');if(view==='builder')renderSetup();else if(view==='reader')await renderQueue();else renderHome();}catch(error){notice(error.message);}})();
+(async()=>{try{state=await api('/api/state');const view=new URLSearchParams(location.search).get('view');const open=new URLSearchParams(location.search).get('open');if(open){standaloneURL=open;await renderQueue();}else if(view==='builder')renderSetup();else if(view==='reader')await renderQueue();else renderHome();}catch(error){notice(error.message);}})();
 
 let mediaEnabled=false;
 try {mediaEnabled=localStorage.getItem('intel-load-media')==='true';}catch{}

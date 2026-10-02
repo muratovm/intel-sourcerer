@@ -31,6 +31,7 @@ uv run pytest -q
 - **Your queue:** add/remove articles with the Add/Added button, drag to reorder, or use the ordering buttons. Drop article URLs or paste a link to import a public HTML page manually.
 - **Reading view:** read the saved article alongside autosaving notes. Resize the divider, quote selected passages into callouts, and apply bold or highlights. Next advances without changing read status; Mark read & next records the read and advances. Return to the builder with the current selection intact, or go Home.
 - **Completion:** finishing the queue opens a centered popup. Starting another queue does not require finishing the previous one.
+- **Library:** search titles, publishers, full saved article text, and notes, including disabled sources. Select a result to preview its formatted notes beside the article list; use With notes to narrow the list. Open an article without replacing your reading queue, or export its article and notes as Markdown. Recent notes sort by last edit time; older notes acquire a timestamp when next edited.
 - **Sources:** view configured publishers and toggle them on/off. Changes persist to the TOML configuration and database. Disabled sources stop appearing in discovery results; stored articles and notes are retained.
 - **Stats:** this year's daily reading heatmap in America/Toronto time. Each article counts once on its first recorded read. Previously read articles without timestamps are excluded. Changing read status later does not erase activity.
 
@@ -62,7 +63,7 @@ The `/classic` route retains the earlier expandable article list.
 
 ## Storage and implementation
 
-The default database is `data/intel_sourcerer.sqlite3`. Database files, SQLite sidecars, virtual environments, caches, and `.env` are ignored by Git. Back up the database separately; it contains your articles, notes, queues, and read history. Existing databases migrate automatically when opened.
+The default database is `data/intel_sourcerer.sqlite3`. Database files, SQLite sidecars, virtual environments, caches, and `.env` are ignored by Git. It contains your articles, notes, queues, and read history. Existing databases migrate automatically when opened.
 
 The current app uses Python's threaded HTTP server, SQLite, and plain HTML/CSS/JavaScript—no frontend build step. Dependencies include httpx, feedparser, Beautiful Soup, Trafilatura, markdownify, markdown-it-py, and bleach. Reader and note HTML are sanitized; write endpoints require a CSRF token.
 
@@ -81,3 +82,16 @@ Key modules in `src/intel_sourcerer/`:
 AI summaries, article chat, scheduled collection, notifications, and richer extraction are future work. There is no automatic background polling or AI provider integration yet.
 
 See [`docs/`](docs/) for source notes, design screenshots, and earlier architecture proposals. Those proposals describe possible future infrastructure rather than the current runtime.
+
+## Automatic backups and recovery
+
+The web server creates one SQLite snapshot per UTC day in `data/backups/`, on startup or before the first note save that day. Existing daily snapshots are kept unchanged. These are daily recovery points, not continuous backups; later edits may not be in that day's snapshot. Snapshots stay local, are ignored by Git, and are not automatically pruned. Copy important snapshots to separate storage for protection against disk loss.
+
+To restore a snapshot:
+
+1. Stop the web server and any import processes.
+2. Move the current database and any matching `-wal` and `-shm` sidecars to a separate recovery folder. Keep them until you have verified the restore.
+3. Copy the desired file from `data/backups/` to `data/intel_sourcerer.sqlite3` (or your configured database path).
+4. Restart the server and check your articles and notes. Restoring also restores queues and read history to the snapshot date.
+
+Browser-local unsaved note drafts may conflict with restored notes. Preserve any draft you want to keep before dismissing a conflict.

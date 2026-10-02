@@ -36,6 +36,8 @@ def connect_database(path):
         db.execute("ALTER TABLE articles ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
     if 'notes_format' not in columns:
         db.execute("ALTER TABLE articles ADD COLUMN notes_format TEXT NOT NULL DEFAULT 'plain'")
+    if 'notes_updated_at' not in columns:
+        db.execute('ALTER TABLE articles ADD COLUMN notes_updated_at TEXT')
     if 'notes_revision' not in columns:
         db.execute('ALTER TABLE articles ADD COLUMN notes_revision INTEGER NOT NULL DEFAULT 0')
     db.executescript('''CREATE TABLE IF NOT EXISTS reading_queues (

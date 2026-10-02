@@ -63,7 +63,7 @@ def save_notes(db,url,text,revision,format='plain'):
         raise SessionError('Invalid note content or revision.')
     if format not in {'plain','html'}:raise SessionError('Invalid note format.')
     if format=='html':text=clean_notes(text)
-    result=db.execute('UPDATE articles SET notes=?,notes_format=?,notes_revision=notes_revision+1 WHERE url=? AND notes_revision=?',(text,format,url,revision))
+    result=db.execute('UPDATE articles SET notes=?,notes_format=?,notes_revision=notes_revision+1,notes_updated_at=? WHERE url=? AND notes_revision=?',(text,format,datetime.now(timezone.utc).isoformat(),url,revision))
     if result.rowcount != 1:
         raise SessionError('Notes changed in another window. Your draft is kept here; reload before continuing.')
     return revision+1

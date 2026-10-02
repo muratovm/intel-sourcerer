@@ -68,7 +68,7 @@ def read_articles(database):
     uri = Path(database).resolve().as_uri() + '?mode=ro'
     with closing(sqlite3.connect(uri, uri=True)) as db, db:
         db.row_factory = sqlite3.Row
-        return db.execute('''SELECT a.title,a.url,a.published_at,a.content_text,a.content_markdown,a.is_read,a.notes,a.notes_format,s.name AS publisher
+        return db.execute('''SELECT a.title,a.url,a.published_at,a.content_text,a.content_markdown,a.is_read,a.notes,a.notes_format,a.notes_updated_at,s.name AS publisher
             FROM articles a JOIN sources s ON s.id=a.source_id
             WHERE s.enabled=1 ORDER BY a.published_at DESC,a.title''').fetchall()
 
@@ -130,6 +130,8 @@ def render_sources(config, csrf_token=""):
 
 def create_server(database, port=8765, config="config/sources.toml"):
     connect_database(database).close()
+    from .backups import backup_database
+    backup_database(database)
     csrf_token = secrets.token_urlsafe(32)
     discovery_lock=threading.Lock()
     class Handler(BaseHTTPRequestHandler):
@@ -145,6 +147,15 @@ def create_server(database, port=8765, config="config/sources.toml"):
 
         def do_GET(self):
             path=urlsplit(self.path).path
+            if path in {'/library','/export'}:
+                from .library import render_library, export_article
+                params=parse_qs(urlsplit(self.path).query)
+                with closing(session_db(database)) as db:
+                    if path=='/library':self.respond(render_library(db,params.get('q',[''])[0],params.get('notes',[''])[0]=='1',params.get('selected',[''])[0]),'text/html; charset=utf-8')
+                    else:
+                        result=export_article(db,params.get('url',[''])[0])
+                        self.respond(result or 'Article not found','text/markdown; charset=utf-8',200 if result else 404)
+                return
             if path=='/sources.js':
                 self.respond(Path(__file__).with_name('sources.js').read_text(),'text/javascript; charset=utf-8')
                 return
@@ -171,7 +182,7 @@ def create_server(database, port=8765, config="config/sources.toml"):
                 try:
                     with closing(session_db(database)) as db, db:
                         if path=='/api/state':
-                            articles=[dict({k:r[k] for k in ('url','title','published_at','is_read','publisher')},note_preview=BeautifulSoup(r['notes'] or '', 'html.parser').get_text(' ',strip=True) if r['notes_format']=='html' else (r['notes'] or ''),has_notes=has_notes(r['notes'],r['notes_format']),article_types=article_types(r['title'],r['content_text'])) for r in read_articles(database)]
+                            articles=[dict({k:r[k] for k in ('url','title','published_at','is_read','publisher','notes_updated_at')},note_preview=BeautifulSoup(r['notes'] or '', 'html.parser').get_text(' ',strip=True) if r['notes_format']=='html' else (r['notes'] or ''),has_notes=has_notes(r['notes'],r['notes_format']),article_types=article_types(r['title'],r['content_text'])) for r in read_articles(database)]
                             self.respond({'articles':articles,'queue':queue_state(db)})
                         elif path=='/api/article':
                             url=parse_qs(urlsplit(self.path).query).get('url',[''])[0]
@@ -221,6 +232,7 @@ def create_server(database, port=8765, config="config/sources.toml"):
                     if not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),csrf_token):
                         self.respond({'error':'Refresh the page and try again.'},status=403);return
                     data=json.loads(self.rfile.read(length))
+                    if self.path=='/api/notes':backup_database(database)
                     if self.path=='/api/source-status':
                         with discovery_lock:
                             set_source_enabled(config,data.get('id'),data.get('enabled'))
