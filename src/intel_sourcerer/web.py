@@ -19,7 +19,7 @@ from contextlib import closing
 from bs4 import BeautifulSoup
 
 from .storage import connect_database
-from .sessions import session_db, queue_state, create_queue, save_notes, navigate, SessionError, has_notes
+from .sessions import session_db, queue_state, create_queue, save_notes, navigate, delete_article, SessionError, has_notes
 from urllib.parse import urlsplit, parse_qs, urlencode
 from zoneinfo import ZoneInfo
 
@@ -125,7 +125,7 @@ def render_sources(config, csrf_token=""):
             status = 'Enabled' if source.enabled else 'Disabled'
             cards.append(f'<article class="source-card"><div class="source-heading"><h3>{escape(source.name)}</h3><label class="source-toggle"><input type="checkbox" data-source="{escape(source.id, quote=True)}" aria-label="Enable {escape(source.name, quote=True)}" {"checked" if source.enabled else ""}> <span class="source-status {status.lower()}">{status}</span></label></div><p class="muted">{escape(source.id)}</p><p class="source-links">{" · ".join(links)}</p><p class="source-url">{escape(source.parent_url)}</p><p class="muted">{escape(source.notes)}</p></article>')
         sections.append(f'<section><h2>{escape(kind)}</h2><div class="source-grid">{"".join(cards)}</div></section>')
-    return f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="csrf-token" content="{escape(csrf_token, quote=True)}"><script src="/sources.js" defer></script><title>Sources · Intel Sourcerer</title><link rel="stylesheet" href="/reader.css"></head><body><main class="sources-page"><header class="builder-header"><div class="brand"><img class="brand-icon" src="/brand-icon.png" alt="">Intel Sourcerer</div><a href="/?view=builder">Back to queue</a></header><h1>Sources</h1><p class="muted">{len(sources)} configured sources · {sum(source.enabled for source in sources)} enabled</p><p class="muted">Configuration: {escape(str(config))}</p>{"".join(sections)}</main></body></html>'
+    return f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="csrf-token" content="{escape(csrf_token, quote=True)}"><script src="/sources.js" defer></script><title>Sources · Intel Sourcerer</title><link rel="stylesheet" href="/reader.css"></head><body><main class="sources-page"><header class="builder-header"><div class="brand"><img class="brand-icon" src="/brand-icon.png" alt="">Intel Sourcerer</div><nav class="builder-links" aria-label="Main navigation"><a href="/">Home</a><a href="/?view=builder">Queue builder</a><a href="/library">Library</a><a href="/sources" class="active" aria-current="page">Sources</a><a href="/stats">Stats</a></nav></header><h1>Sources</h1><p class="muted">{len(sources)} configured sources · {sum(source.enabled for source in sources)} enabled</p><p class="muted">Configuration: {escape(str(config))}</p>{"".join(sections)}</main></body></html>'
 
 
 def create_server(database, port=8765, config="config/sources.toml"):
@@ -151,10 +151,13 @@ def create_server(database, port=8765, config="config/sources.toml"):
                 from .library import render_library, export_article
                 params=parse_qs(urlsplit(self.path).query)
                 with closing(session_db(database)) as db:
-                    if path=='/library':self.respond(render_library(db,params.get('q',[''])[0],params.get('notes',[''])[0]=='1',params.get('selected',[''])[0]),'text/html; charset=utf-8')
+                    if path=='/library':self.respond(render_library(db,params.get('q',[''])[0],params.get('notes',[''])[0]=='1',params.get('selected',[''])[0],csrf_token),'text/html; charset=utf-8')
                     else:
                         result=export_article(db,params.get('url',[''])[0])
                         self.respond(result or 'Article not found','text/markdown; charset=utf-8',200 if result else 404)
+                return
+            if path=='/library.js':
+                self.respond(Path(__file__).with_name('library.js').read_text(),'text/javascript; charset=utf-8')
                 return
             if path=='/sources.js':
                 self.respond(Path(__file__).with_name('sources.js').read_text(),'text/javascript; charset=utf-8')
@@ -232,7 +235,7 @@ def create_server(database, port=8765, config="config/sources.toml"):
                     if not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),csrf_token):
                         self.respond({'error':'Refresh the page and try again.'},status=403);return
                     data=json.loads(self.rfile.read(length))
-                    if self.path=='/api/notes':backup_database(database)
+                    if self.path in {'/api/notes','/api/delete-article'}:backup_database(database)
                     if self.path=='/api/source-status':
                         with discovery_lock:
                             set_source_enabled(config,data.get('id'),data.get('enabled'))
@@ -258,6 +261,7 @@ def create_server(database, port=8765, config="config/sources.toml"):
                         db.execute('BEGIN IMMEDIATE')
                         if self.path=='/api/queue':result=create_queue(db,data.get('urls'))
                         elif self.path=='/api/notes':result={'revision':save_notes(db,data.get('url'),data.get('text'),data.get('revision'),data.get('format','plain'))}
+                        elif self.path=='/api/delete-article':result=delete_article(db,data.get('url'))
                         elif self.path=='/api/navigate':result=navigate(db,data.get('queue_id'),data.get('cursor'),data.get('action'))
                         else:self.respond({'error':'Not found'},status=404);return
                     self.respond(result)

@@ -87,3 +87,20 @@ def navigate(db,queue_id,cursor,action):
         else:
             db.execute('UPDATE reading_queues SET cursor=cursor+1 WHERE id=?',(queue_id,))
     return queue_state(db)
+
+
+def delete_article(db,url):
+    if not isinstance(url,str) or not db.execute('SELECT 1 FROM articles WHERE url=?',(url,)).fetchone():
+        raise SessionError('Article not found. Refresh the library.')
+    queues=db.execute('SELECT q.* FROM reading_queues q JOIN queue_items i ON i.queue_id=q.id WHERE i.article_url=?',(url,)).fetchall()
+    for queue in queues:
+        items=db.execute('SELECT article_url,position FROM queue_items WHERE queue_id=? ORDER BY position',(queue['id'],)).fetchall()
+        removed=next(i['position'] for i in items if i['article_url']==url)
+        remaining=[i['article_url'] for i in items if i['article_url']!=url]
+        db.execute('DELETE FROM queue_items WHERE queue_id=?',(queue['id'],))
+        db.executemany('INSERT INTO queue_items VALUES (?,?,?)',[(queue['id'],i,u) for i,u in enumerate(remaining)])
+        cursor=max(0,queue['cursor']-int(removed<queue['cursor']))
+        db.execute('UPDATE reading_queues SET cursor=?,finished=? WHERE id=?',(min(cursor,max(0,len(remaining)-1)),int(bool(queue['finished']) or not remaining),queue['id']))
+    db.execute('DELETE FROM article_reads WHERE article_url=?',(url,))
+    db.execute('DELETE FROM articles WHERE url=?',(url,))
+    return {'deleted':url}

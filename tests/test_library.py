@@ -3,7 +3,7 @@ import sqlite3
 from intel_sourcerer.storage import connect_database,save_source,save_article
 from intel_sourcerer.config import PublisherSource
 from intel_sourcerer.feeds import Article
-from intel_sourcerer.sessions import save_notes,create_queue,queue_state
+from intel_sourcerer.sessions import save_notes,create_queue,queue_state,delete_article
 from intel_sourcerer.library import render_library,export_article
 from intel_sourcerer.backups import backup_database
 
@@ -35,4 +35,10 @@ def test_library_export_notes_and_backup(tmp_path):
     with sqlite3.connect(snapshot) as restored:
         assert restored.execute('SELECT notes FROM articles').fetchone()[0]=='<p>Personal takeaway</p>'
     assert backup_database(path)==snapshot
+    db.execute('PRAGMA foreign_keys=ON')
+    delete_article(db,article.url)
+    assert not db.execute('SELECT 1 FROM articles WHERE url=?',(article.url,)).fetchone()
+    assert queue_state(db)['items']==[]
+    assert queue_state(db)['finished']
+    assert not db.execute('SELECT 1 FROM article_reads WHERE article_url=?',(article.url,)).fetchone()
     db.close()
