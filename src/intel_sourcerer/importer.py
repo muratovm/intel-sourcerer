@@ -71,7 +71,7 @@ def listing_articles(html, source, page_url):
 async def import_articles(config, database, since, until):
     if since >= until:
         raise ValueError('since must precede until')
-    sources = [s for s in load_sources(config) if s.enabled and s.source_type == 'ai_lab']
+    sources = [s for s in load_sources(config) if s.enabled]
     report = {'since':since.isoformat(), 'until':until.isoformat(), 'sources':[], 'errors':[]}
     db = connect_database(database)
     started = datetime.now(timezone.utc).isoformat()

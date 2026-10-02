@@ -13,7 +13,7 @@ import threading
 from datetime import timedelta, timezone
 import httpx
 from .discovery import article_types, import_link
-from .config import load_sources
+from .config import load_sources, set_source_enabled
 from .importer import import_articles
 from contextlib import closing
 from bs4 import BeautifulSoup
@@ -109,7 +109,7 @@ def render_page(articles, csrf_token="", open_url=None):
     <div class="list">{listing}</div></main></body></html>'''
 
 
-def render_sources(config):
+def render_sources(config, csrf_token=""):
     sources = load_sources(config)
     groups = {}
     for source in sources:
@@ -123,9 +123,9 @@ def render_sources(config):
                 if url:
                     links.append(f'<a href="{escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">{label} ↗</a>')
             status = 'Enabled' if source.enabled else 'Disabled'
-            cards.append(f'<article class="source-card"><div class="source-heading"><h3>{escape(source.name)}</h3><span class="source-status {status.lower()}">{status}</span></div><p class="muted">{escape(source.id)}</p><p class="source-links">{" · ".join(links)}</p><p class="source-url">{escape(source.parent_url)}</p><p class="muted">{escape(source.notes)}</p></article>')
+            cards.append(f'<article class="source-card"><div class="source-heading"><h3>{escape(source.name)}</h3><label class="source-toggle"><input type="checkbox" data-source="{escape(source.id, quote=True)}" aria-label="Enable {escape(source.name, quote=True)}" {"checked" if source.enabled else ""}> <span class="source-status {status.lower()}">{status}</span></label></div><p class="muted">{escape(source.id)}</p><p class="source-links">{" · ".join(links)}</p><p class="source-url">{escape(source.parent_url)}</p><p class="muted">{escape(source.notes)}</p></article>')
         sections.append(f'<section><h2>{escape(kind)}</h2><div class="source-grid">{"".join(cards)}</div></section>')
-    return f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sources · Intel Sourcerer</title><link rel="stylesheet" href="/reader.css"></head><body><main class="sources-page"><header class="builder-header"><div class="brand"><img class="brand-icon" src="/brand-icon.png" alt="">Intel Sourcerer</div><a href="/?view=builder">Back to queue</a></header><h1>Sources</h1><p class="muted">{len(sources)} configured sources · {sum(source.enabled for source in sources)} enabled</p><p class="muted">Configuration: {escape(str(config))}</p>{"".join(sections)}</main></body></html>'
+    return f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="csrf-token" content="{escape(csrf_token, quote=True)}"><script src="/sources.js" defer></script><title>Sources · Intel Sourcerer</title><link rel="stylesheet" href="/reader.css"></head><body><main class="sources-page"><header class="builder-header"><div class="brand"><img class="brand-icon" src="/brand-icon.png" alt="">Intel Sourcerer</div><a href="/?view=builder">Back to queue</a></header><h1>Sources</h1><p class="muted">{len(sources)} configured sources · {sum(source.enabled for source in sources)} enabled</p><p class="muted">Configuration: {escape(str(config))}</p>{"".join(sections)}</main></body></html>'
 
 
 def create_server(database, port=8765, config="config/sources.toml"):
@@ -145,6 +145,9 @@ def create_server(database, port=8765, config="config/sources.toml"):
 
         def do_GET(self):
             path=urlsplit(self.path).path
+            if path=='/sources.js':
+                self.respond(Path(__file__).with_name('sources.js').read_text(),'text/javascript; charset=utf-8')
+                return
             if path=='/brand-icon.png':
                 self.respond(Path(__file__).with_name('brand-icon.png').read_bytes(), 'image/png')
                 return
@@ -155,7 +158,7 @@ def create_server(database, port=8765, config="config/sources.toml"):
                 return
             if path=='/sources':
                 try:
-                    self.respond(render_sources(config), 'text/html; charset=utf-8')
+                    self.respond(render_sources(config,csrf_token), 'text/html; charset=utf-8')
                 except (OSError, ValueError) as exc:
                     self.respond({'error':str(exc)}, status=500)
                 return
@@ -218,6 +221,13 @@ def create_server(database, port=8765, config="config/sources.toml"):
                     if not secrets.compare_digest(self.headers.get('X-CSRF-Token',''),csrf_token):
                         self.respond({'error':'Refresh the page and try again.'},status=403);return
                     data=json.loads(self.rfile.read(length))
+                    if self.path=='/api/source-status':
+                        with discovery_lock:
+                            set_source_enabled(config,data.get('id'),data.get('enabled'))
+                            with closing(connect_database(database)) as source_db, source_db:
+                                source_db.execute('UPDATE sources SET enabled=? WHERE id=?',(int(data['enabled']),data['id']))
+                        self.respond({'enabled':data['enabled']})
+                        return
                     if not isinstance(data,dict):raise ValueError('Invalid request')
                     if self.path in {'/api/discover','/api/link'}:
                         if not discovery_lock.acquire(blocking=False):

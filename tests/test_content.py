@@ -56,3 +56,10 @@ def test_header_image_not_duplicated_and_unsafe_metadata_ignored():
     assert len(media) == 1
     md, media = extract_markdown('<meta property="og:image" content="javascript:alert(1)"><article><p>Body</p></article>', 'https://example.com/report')
     assert not media
+
+
+def test_report_with_multiple_article_sections_preserves_whole_document():
+    html='<main><h1>System card</h1><article><h2>Introduction</h2><p>First section.</p></article><article><h2>Evaluations</h2><table><tr><th>Model</th><th>Score</th></tr><tr><td>Example</td><td>42</td></tr></table></article><article><h2>References</h2><p>Final section.</p></article></main>'
+    md,media=extract_markdown(html,'https://example.com/report')
+    assert 'First section.' in md and 'Final section.' in md and '| Example | 42 |' in md
+    assert md.index('Introduction') < md.index('Evaluations') < md.index('References')

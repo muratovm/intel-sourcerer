@@ -64,3 +64,37 @@ def load_sources(path: str | Path) -> list[PublisherSource]:
                 raise ValueError(f"{source.id}: {key} must be an HTTP(S) URL")
         sources.append(source)
     return sources
+
+
+def set_source_enabled(path, source_id, enabled):
+    """Update one source while preserving TOML comments and ordering."""
+    import re
+    import os
+    import tempfile
+    path=Path(path)
+    if type(enabled) is not bool:
+        raise ValueError('Enabled must be boolean')
+    sources=load_sources(path)
+    if source_id not in {source.id for source in sources}:
+        raise ValueError('Unknown source')
+    text=path.read_text()
+    parts=re.split(r'(?m)(?=^\[\[sources\]\]\s*$)',text)
+    for index,part in enumerate(parts):
+        match=re.search(r'(?m)^id\s*=\s*[\"\']([^\"\']+)[\"\']',part)
+        if match and match.group(1)==source_id:
+            line=f'enabled = {str(enabled).lower()}'
+            if re.search(r'(?m)^enabled\s*=',part):
+                part=re.sub(r'(?m)^enabled\s*=\s*(true|false)',line,part)
+            else:
+                part=part.replace(match.group(0),match.group(0)+'\n'+line,1)
+            parts[index]=part
+            break
+    with tempfile.NamedTemporaryFile(mode='w',dir=path.parent,delete=False) as handle:
+        temporary=Path(handle.name)
+        handle.write(''.join(parts))
+    try:
+        load_sources(temporary)
+        os.chmod(temporary,path.stat().st_mode)
+        os.replace(temporary,path)
+    finally:
+        temporary.unlink(missing_ok=True)

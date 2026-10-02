@@ -59,3 +59,20 @@ def test_read_status_defaults_unread_and_survives_reimport(tmp_path):
     save_article(db,SOURCE.id,a,**args)
     assert db.execute('SELECT is_read FROM articles').fetchone()[0]==1
     db.close()
+
+
+def test_import_attempts_every_enabled_source_type(tmp_path,monkeypatch):
+    import asyncio
+    import intel_sourcerer.importer as importer
+    from intel_sourcerer.feeds import FeedResult
+    sources=[PublisherSource('vendor','Vendor','https://example.com','security_vendor','https://example.com/rss'),PublisherSource('unsupported','Other','https://example.com','government'),PublisherSource('disabled','Disabled','https://example.com','ai_lab',enabled=False)]
+    monkeypatch.setattr(importer,'load_sources',lambda _:sources)
+    calls=[]
+    async def fetch(client,feed):
+        calls.append(feed.name)
+        return FeedResult(feed,[])
+    monkeypatch.setattr(importer,'fetch_feed',fetch)
+    report=asyncio.run(importer.import_articles('unused',tmp_path/'all.db',datetime(2026,9,1,tzinfo=timezone.utc),datetime(2026,10,1,tzinfo=timezone.utc)))
+    assert calls==['Vendor']
+    assert [s['id'] for s in report['sources']]==['vendor','unsupported']
+    assert any('unsupported: no listing adapter' in error for error in report['errors'])

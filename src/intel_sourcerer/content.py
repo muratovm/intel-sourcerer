@@ -15,7 +15,13 @@ def safe_url(value, base):
 def extract_markdown(html, url):
     soup = BeautifulSoup(html, 'html.parser')
     articles = soup.find_all('article')
-    root = max(articles, key=lambda a: len(a.get_text())) if articles else soup.find('main') or soup.body or soup
+    main = soup.find('main')
+    top_articles = [article for article in articles if not article.find_parent('article')]
+    # Reports may divide the whole document into sibling article sections.
+    if main and len([article for article in top_articles if main in article.parents]) > 1:
+        root = main
+    else:
+        root = max(articles, key=lambda a: len(a.get_text())) if articles else main or soup.body or soup
     # Hero images can live outside the article element; publisher metadata is a fallback.
     header_image = None
     header_alt = 'Article header image'
