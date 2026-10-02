@@ -1,0 +1,187 @@
+# Curated original-research publishers, reviewed 2026-10-01.
+# Grouped by publisher source_type; this is not a ranking.
+# parent_url is a discovery page, not an article URL prefix.
+# Broader RSS feeds need relevance filtering; sources without RSS need listing adapters.
+schema_version = 1
+
+# ai_lab
+
+[[sources]]
+id = "openai"
+name = "OpenAI"
+source_type = "ai_lab"
+enabled = true
+parent_url = "https://openai.com/index/disrupting-malicious-uses-of-ai/"
+rss_url = "https://openai.com/news/rss.xml"
+notes = "Dedicated misuse reports and case studies hub; RSS includes all OpenAI news and needs relevance filtering."
+
+[[sources]]
+id = "anthropic"
+name = "Anthropic"
+source_type = "ai_lab"
+enabled = true
+parent_url = "https://www.anthropic.com/threat-intelligence"
+notes = "Dedicated threat intelligence reports index. Official RSS not verified; requires a future listing adapter."
+
+# security_vendor
+
+[[sources]]
+id = "google-tag"
+name = "Google Threat Analysis Group"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://blog.google/security/"
+legacy_parent_url = "https://blog.google/threat-analysis-group/"
+rss_url = "https://blog.google/security/rss/"
+notes = "Legacy TAG index redirects to the broader Security blog. This feed includes non-TAG security articles."
+
+[[sources]]
+id = "google-gtig"
+name = "Google Threat Intelligence"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://cloud.google.com/blog/topics/threat-intelligence"
+rss_url = "https://feeds.feedburner.com/threatintelligence/pvexyqv7v0v"
+notes = "Separate Google Cloud threat intelligence publication, retained from the initial project scope."
+
+[[sources]]
+id = "microsoft"
+name = "Microsoft Threat Intelligence"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.microsoft.com/en-us/security/blog/topic/threat-intelligence/"
+rss_url = "https://www.microsoft.com/en-us/security/blog/feed/"
+notes = "Nation-state campaigns, ransomware, identity abuse, and telemetry-backed investigations. Working feed covers a broader publication than this research index; relevance filtering is needed."
+
+[[sources]]
+id = "unit42"
+name = "Palo Alto Networks Unit 42"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://unit42.paloaltonetworks.com/"
+rss_url = "https://unit42.paloaltonetworks.com/feed/"
+notes = "Original malware analysis, active exploitation, cloud attacks, and incident-response research."
+
+[[sources]]
+id = "talos"
+name = "Cisco Talos"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://blog.talosintelligence.com/"
+rss_url = "https://blog.talosintelligence.com/rss/"
+notes = "Campaign investigations, malware reverse engineering, vulnerabilities, and incident-response findings."
+
+[[sources]]
+id = "sentinellabs"
+name = "SentinelLABS"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.sentinelone.com/labs/"
+rss_url = "https://www.sentinelone.com/labs/feed/"
+notes = "Technical malware and threat-actor investigations, including espionage and macOS threats."
+
+[[sources]]
+id = "crowdstrike"
+name = "CrowdStrike Threat Intelligence"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.crowdstrike.com/en-us/blog/"
+rss_url = "https://www.crowdstrike.com/en-us/blog/feed/"
+notes = "Adversary tracking, intrusion campaigns, and frontline threat intelligence. The current blog and working feed include broader product/company posts; relevance filtering is needed."
+
+[[sources]]
+id = "securelist"
+name = "Kaspersky Securelist"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://securelist.com/"
+rss_url = "https://securelist.com/feed/"
+notes = "Original APT, malware, and cybercrime research with technical artifacts."
+
+[[sources]]
+id = "eset"
+name = "ESET WeLiveSecurity"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.welivesecurity.com/en/"
+rss_url = "https://www.welivesecurity.com/en/rss/feed/"
+notes = "APT campaigns, malware reverse engineering, and regional threat research; broader news also appears."
+
+[[sources]]
+id = "sophos"
+name = "Sophos X-Ops"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.sophos.com/en-us/blog/category/threat-research"
+rss_url = "https://www.sophos.com/en-us/blog/feed"
+notes = "Ransomware, incident-response findings, and technical malware research. Current Sophos blog feed is verified; includes broader posts. The former news.sophos.com endpoint timed out."
+
+[[sources]]
+id = "proofpoint"
+name = "Proofpoint Threat Insight"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.proofpoint.com/us/blog/threat-insight"
+rss_url = "https://www.proofpoint.com/us/rss.xml"
+notes = "Email-delivered campaigns, social engineering, cybercrime, and threat-actor tracking. Working feed covers a broader publication than this research index; relevance filtering is needed."
+
+[[sources]]
+id = "checkpoint"
+name = "Check Point Research"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://research.checkpoint.com/"
+rss_url = "https://research.checkpoint.com/feed/"
+notes = "Original malware, vulnerability, cybercrime, and nation-state campaign analysis."
+
+[[sources]]
+id = "trendmicro"
+name = "Trend Micro Research"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.trendmicro.com/en_us/research.html"
+notes = "Malware, exploitation, cloud threats, and campaign research. No working official RSS verified; listing adapter required."
+
+[[sources]]
+id = "elastic"
+name = "Elastic Security Labs"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.elastic.co/security-labs"
+notes = "Technical malware research, intrusion analysis, and detection engineering. No working official RSS verified; listing adapter required."
+
+[[sources]]
+id = "rapid7"
+name = "Rapid7 Research"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.rapid7.com/blog/tag/research/"
+rss_url = "https://www.rapid7.com/rss.xml"
+notes = "Vulnerability disclosures, exploitation analysis, and attacker research. Working feed covers a broader publication than this research index; relevance filtering is needed."
+
+[[sources]]
+id = "huntress"
+name = "Huntress"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.huntress.com/blog"
+rss_url = "https://www.huntress.com/blog/rss.xml"
+notes = "Frontline investigations of active exploitation, ransomware, and tradecraft; broader company posts also appear."
+
+[[sources]]
+id = "redcanary"
+name = "Red Canary Threat Intelligence"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.zscaler.com/blogs"
+rss_url = "https://redcanary.com/feed/"
+notes = "Behavior-focused threat research, malware campaigns, and detection intelligence. Working feed covers a broader publication than this research index; relevance filtering is needed."
+
+[[sources]]
+id = "recordedfuture"
+name = "Recorded Future Insikt Group"
+source_type = "security_vendor"
+enabled = false
+parent_url = "https://www.recordedfuture.com/research"
+rss_url = "https://www.recordedfuture.com/feed"
+notes = "Original espionage, cybercrime, infrastructure, and geopolitical threat investigations. Working feed covers a broader publication than this research index; relevance filtering is needed."

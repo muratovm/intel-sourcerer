@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1220" height="760" viewBox="0 0 1220 760">
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="#6986aa"/></marker></defs>
+<rect width="1220" height="760" fill="#0c1422"/>
+<text x="40" y="48" fill="#eef4ff" font-family="Arial" font-size="28" font-weight="bold">Intel Sourcerer</text>
+<text x="40" y="78" fill="#a8bad0" font-family="Arial" font-size="16">Proposed local architecture · browser, API, worker, and database run on your Mac</text>
+<rect x="300" y="110" width="610" height="385" rx="18" fill="#111f31" stroke="#314860" stroke-dasharray="7 5"/>
+<path d="M270 200 H320" fill="none" stroke="#6986aa" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="274" y="188" fill="#b9cbe0" font-family="Arial" font-size="13">discover</text>
+<path d="M580 200 H630" fill="none" stroke="#6986aa" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="582" y="188" fill="#b9cbe0" font-family="Arial" font-size="13">new text</text>
+<path d="M450 255 V345" fill="none" stroke="#6986aa" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="460" y="304" fill="#b9cbe0" font-family="Arial" font-size="13">store article</text>
+<path d="M760 255 V300 H550 V345" fill="none" stroke="#6986aa" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="583" y="287" fill="#b9cbe0" font-family="Arial" font-size="13">save enrichment</text>
+<path d="M270 400 H320" fill="none" stroke="#6986aa" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="275" y="386" fill="#b9cbe0" font-family="Arial" font-size="13">trigger</text>
+<path d="M580 405 H630" fill="none" stroke="#6986aa" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="578" y="330" fill="#b9cbe0" font-family="Arial" font-size="13">read / write</text>
+<path d="M940 405 H890" fill="none" stroke="#6986aa" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="909" y="330" fill="#b9cbe0" font-family="Arial" font-size="13">HTTP / stream</text>
+<path d="M760 465 V555" fill="none" stroke="#6986aa" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="770" y="518" fill="#b9cbe0" font-family="Arial" font-size="13">AI requests</text>
+<path d="M890 200 H915 V605 H890" fill="none" stroke="#6986aa" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="922" y="270" fill="#b9cbe0" font-family="Arial" font-size="13">AI requests</text>
+<path d="M1055 465 V555" fill="none" stroke="#6986aa" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="1066" y="515" fill="#b9cbe0" font-family="Arial" font-size="13">download note</text>
+<rect x="40" y="145" width="230" height="110" rx="12" fill="#1c2940" stroke="#596787"/>
+<text x="56" y="173" fill="#f0f7ff" font-family="Arial" font-size="17" font-weight="bold">Publisher websites</text>
+<text x="56" y="199" fill="#c4d5e6" font-family="Arial" font-size="13">Google Threat Intelligence</text>
+<text x="56" y="220" fill="#c4d5e6" font-family="Arial" font-size="13">Anthropic · OpenAI · others</text>
+<rect x="320" y="145" width="260" height="110" rx="12" fill="#183447" stroke="#3b7e8b"/>
+<text x="336" y="173" fill="#f0f7ff" font-family="Arial" font-size="17" font-weight="bold">Collection worker · Python</text>
+<text x="336" y="199" fill="#c4d5e6" font-family="Arial" font-size="13">RSS / listing adapters</text>
+<text x="336" y="220" fill="#c4d5e6" font-family="Arial" font-size="13">Fetch → extract → deduplicate</text>
+<rect x="630" y="145" width="260" height="110" rx="12" fill="#183447" stroke="#3b7e8b"/>
+<text x="646" y="173" fill="#f0f7ff" font-family="Arial" font-size="17" font-weight="bold">Enrichment · Python</text>
+<text x="646" y="199" fill="#c4d5e6" font-family="Arial" font-size="13">Cybersecurity relevance + tags</text>
+<text x="646" y="220" fill="#c4d5e6" font-family="Arial" font-size="13">Short summaries · citations</text>
+<rect x="320" y="345" width="260" height="120" rx="12" fill="#183447" stroke="#3b7e8b"/>
+<text x="336" y="373" fill="#f0f7ff" font-family="Arial" font-size="17" font-weight="bold">PostgreSQL</text>
+<text x="336" y="399" fill="#c4d5e6" font-family="Arial" font-size="13">Articles + content versions</text>
+<text x="336" y="420" fill="#c4d5e6" font-family="Arial" font-size="13">Notes · chats · AI results</text>
+<text x="336" y="441" fill="#c4d5e6" font-family="Arial" font-size="13">Durable jobs · source health</text>
+<rect x="630" y="345" width="260" height="120" rx="12" fill="#183447" stroke="#3b7e8b"/>
+<text x="646" y="373" fill="#f0f7ff" font-family="Arial" font-size="17" font-weight="bold">FastAPI backend</text>
+<text x="646" y="399" fill="#c4d5e6" font-family="Arial" font-size="13">Article search + read / save</text>
+<text x="646" y="420" fill="#c4d5e6" font-family="Arial" font-size="13">AI actions + streamed answers</text>
+<text x="646" y="441" fill="#c4d5e6" font-family="Arial" font-size="13">Credentials stay on server</text>
+<rect x="940" y="345" width="230" height="120" rx="12" fill="#183447" stroke="#3b7e8b"/>
+<text x="956" y="373" fill="#f0f7ff" font-family="Arial" font-size="17" font-weight="bold">Browser interface</text>
+<text x="956" y="399" fill="#c4d5e6" font-family="Arial" font-size="13">React · TypeScript · Vite</text>
+<text x="956" y="420" fill="#c4d5e6" font-family="Arial" font-size="13">Inbox | Reader | AI workspace</text>
+<text x="956" y="441" fill="#c4d5e6" font-family="Arial" font-size="13">Highlights · notes · catch up</text>
+<rect x="630" y="555" width="260" height="100" rx="12" fill="#1c2940" stroke="#596787"/>
+<text x="646" y="583" fill="#f0f7ff" font-family="Arial" font-size="17" font-weight="bold">AI provider API</text>
+<text x="646" y="609" fill="#c4d5e6" font-family="Arial" font-size="13">Classification + summaries</text>
+<text x="646" y="630" fill="#c4d5e6" font-family="Arial" font-size="13">On-demand article questions</text>
+<rect x="40" y="345" width="230" height="120" rx="12" fill="#183447" stroke="#3b7e8b"/>
+<text x="56" y="373" fill="#f0f7ff" font-family="Arial" font-size="17" font-weight="bold">Scheduled collection</text>
+<text x="56" y="399" fill="#c4d5e6" font-family="Arial" font-size="13">Every 30 minutes while awake</text>
+<text x="56" y="420" fill="#c4d5e6" font-family="Arial" font-size="13">Retries + conditional requests</text>
+<text x="56" y="441" fill="#c4d5e6" font-family="Arial" font-size="13">Last successful check</text>
+<rect x="940" y="555" width="230" height="100" rx="12" fill="#1c2940" stroke="#596787"/>
+<text x="956" y="583" fill="#f0f7ff" font-family="Arial" font-size="17" font-weight="bold">Markdown export</text>
+<text x="956" y="609" fill="#c4d5e6" font-family="Arial" font-size="13">Saved research notes</text>
+<text x="956" y="630" fill="#c4d5e6" font-family="Arial" font-size="13">Manual export to Obsidian</text>
+<text x="40" y="702" fill="#a8bad0" font-family="Arial" font-size="14">Collection and AI jobs persist in PostgreSQL; the worker resumes unfinished jobs after restart.</text>
+<text x="40" y="727" fill="#a8bad0" font-family="Arial" font-size="14">External dependencies: publishers and AI API. Article text is untrusted; AI answers cite stored source passages.</text>
+</svg>

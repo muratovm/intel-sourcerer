@@ -1,0 +1,21 @@
+[project]
+name = "intel-sourcerer"
+version = "0.1.0"
+description = "Cybersecurity intelligence, from source to insight"
+requires-python = ">=3.12"
+dependencies = ["feedparser>=6.0.11,<7", "httpx>=0.28,<1", "beautifulsoup4>=4.12,<5", "trafilatura>=2.2,<3", "markdownify>=1.2,<2", "markdown-it-py>=4,<5", "bleach>=6,<7"]
+
+[project.scripts]
+intel-sourcerer = "intel_sourcerer.cli:main"
+intel-sourcerer-import = "intel_sourcerer.importer:main"
+intel-sourcerer-web = "intel_sourcerer.web:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
