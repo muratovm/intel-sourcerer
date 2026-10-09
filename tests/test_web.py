@@ -41,7 +41,7 @@ def test_read_toggle_persists_both_states_and_rejects_invalid_requests(tmp_path)
     article=Article('Test','Report','https://example.com/report','report',datetime.now(timezone.utc),None,None,'')
     save_article(db,source.id,article,content='Article text',error=None,reason='test',discovered_at='today')
     db.commit()
-    server=create_server(path,0)
+    server=create_server(path,0, auth_enabled=False)
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     try:
         with httpx.Client(base_url=f'http://127.0.0.1:{server.server_port}',follow_redirects=True,trust_env=False) as client:

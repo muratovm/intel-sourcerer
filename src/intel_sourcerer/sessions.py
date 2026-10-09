@@ -101,6 +101,19 @@ def delete_article(db,url):
         db.executemany('INSERT INTO queue_items VALUES (?,?,?)',[(queue['id'],i,u) for i,u in enumerate(remaining)])
         cursor=max(0,queue['cursor']-int(removed<queue['cursor']))
         db.execute('UPDATE reading_queues SET cursor=?,finished=? WHERE id=?',(min(cursor,max(0,len(remaining)-1)),int(bool(queue['finished']) or not remaining),queue['id']))
+    db.execute('DELETE FROM timed_reading_sessions WHERE article_url=?',(url,))
     db.execute('DELETE FROM article_reads WHERE article_url=?',(url,))
     db.execute('DELETE FROM articles WHERE url=?',(url,))
     return {'deleted':url}
+
+
+def rename_article(db, url, title):
+    """Change the saved display title without altering content or reading history."""
+    if not isinstance(title, str) or not title.strip() or len(title.strip()) > 500:
+        raise SessionError("Enter a title between 1 and 500 characters.")
+    if not isinstance(url, str):
+        raise SessionError("Article not found.")
+    title = title.strip()
+    if db.execute("UPDATE articles SET title=? WHERE url=?", (title, url)).rowcount != 1:
+        raise SessionError("Article not found.")
+    return {"title": title}

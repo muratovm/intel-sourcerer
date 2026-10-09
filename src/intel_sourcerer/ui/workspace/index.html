@@ -2,11 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="user-id" content="__USER_ID__" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="csrf-token" content="__TOKEN__" />
     <title>Intel Sourcerer</title>
     <link rel="stylesheet" href="/reader.css" />
+    <script src="/vendor/katex/katex.min.js" defer></script>
+    <script src="/vendor/katex/auto-render.min.js" defer></script>
+    <script src="/math.js" defer></script>
     <script src="/reader.js" defer></script>
+    <script src="/focus.js" defer></script>
   </head>
   <body>
     <div id="notice" role="alert" hidden></div>
@@ -32,5 +37,24 @@
         <button id="new-queue" class="primary">Create new queue</button>
       </section>
     </div>
+<dialog
+      id="delete-dialog"
+      class="lib-dialog"
+      aria-labelledby="delete-title"
+      aria-describedby="delete-description"
+    >
+      <h2 id="delete-title">Delete this article?</h2>
+      <p id="delete-description">
+        The saved article and its notes will be deleted. It will also be removed
+        from reading queues and read history.
+      </p>
+      <p id="delete-error" role="alert" hidden></p>
+      <div class="lib-dialog-actions">
+        <button id="cancel-delete" type="button" autofocus>Cancel</button
+        ><button id="confirm-delete" class="danger" type="button">
+          Delete article
+        </button>
+      </div>
+    </dialog>
   </body>
 </html>

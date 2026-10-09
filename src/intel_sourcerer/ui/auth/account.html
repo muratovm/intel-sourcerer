@@ -1,0 +1,8 @@
+<p>Signed in as <strong>${username}</strong></p>
+<p><a href="/">Back to Intel Sourcerer</a></p>
+<form method="post" action="/auth/logout">
+  <input type="hidden" name="csrf_token" value="${csrf}">
+  <button type="submit">Sign out</button>
+</form>
+${password_form}
+${create_user_form}

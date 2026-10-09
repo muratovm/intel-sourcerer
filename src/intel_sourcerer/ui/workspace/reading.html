@@ -1,144 +1,143 @@
-    <section id="reader" hidden aria-label="Reading session">
-      <header class="nav-bar top">
-        <div class="reader-brand">
-          <div class="brand">
-            <img class="brand-icon" src="/brand-icon.png" alt="" />Intel
-            Sourcerer
-          </div>
-          <div class="reader-links">
-            <button data-action="home" type="button" class="exit-queue">
-              Home</button
-            ><button data-action="exit" type="button" class="exit-queue">
-              Back to queue builder
-            </button>
-          </div>
-        </div>
-        <div class="progress-area">
-          <span class="position"></span
-          ><progress
-            class="queue-progress"
-            max="1"
-            value="0"
-            aria-label="Articles marked read"
-          ></progress>
-        </div>
-        <div class="nav-controls">
-          <button data-action="previous">Previous</button
-          ><button data-action="next" class="primary">Next</button>
-        </div>
-        <div class="up-next">
-          <span>Up next</span><strong class="next-title"></strong>
-        </div>
-      </header>
-      <div class="workspace">
-        <article
-          id="article-pane"
-          class="article-pane"
-          tabindex="0"
-          aria-label="Article"
-        >
-          <p class="eyebrow">SECURITY RESEARCH</p>
-          <h1 id="article-title"></h1>
-          <p id="article-meta" class="muted"></p>
-          <a id="original" target="_blank" rel="noopener noreferrer"
-            >Read original article</a
-          >
-          <div class="media-controls">
-            <label
-              ><input id="load-media" type="checkbox" /> Load article
-              media</label
-            ><span class="muted"
-              >Loads images and videos from external sites.</span
-            >
-          </div>
-          <hr />
-          <div id="article-body" class="markdown"></div>
-        </article>
-        <div
-          id="pane-divider"
-          role="separator"
-          tabindex="0"
-          aria-label="Resize article and notes panes"
-          aria-orientation="vertical"
-          aria-controls="article-pane"
-          aria-valuemin="30"
-          aria-valuemax="70"
-          aria-valuenow="50"
-          title="Drag to resize; arrow keys adjust; double-click to reset"
-        ></div>
-        <aside class="notes-pane" aria-label="Article notes">
-          <div class="notes-heading">
-            <h2>Notes</h2>
-            <span
-              id="save-status"
-              class="muted"
-              role="status"
-              aria-live="polite"
-              >Saved</span
-            >
-          </div>
-          <label class="sr-only" for="notes">Your notes for this article</label>
-          <div
-            class="notes-toolbar"
-            role="toolbar"
-            aria-label="Note formatting"
-          >
-            <button
-              type="button"
-              data-format="bold"
-              aria-label="Bold"
-              title="Bold (⌘B / Ctrl+B)"
-            >
-              Bold</button
-            ><button
-              type="button"
-              data-format="highlight"
-              aria-label="Highlight"
-            >
-              Highlight</button
-            ><button type="button" data-format="callout" aria-label="Callout">
-              Callout
-            </button>
-          </div>
-          <div
-            id="notes"
-            contenteditable="true"
-            role="textbox"
-            aria-multiline="true"
-            aria-label="Your notes for this article"
-            data-placeholder="What stands out? Jot down a takeaway, question, or follow-up…"
-          ></div>
-          <div class="note-tools">
-            <button id="quote-selection" type="button">
-              Add selected passage to notes</button
-            ><button data-action="unread" id="mark-unread" type="button">
-              Mark unread
-            </button>
-          </div>
-          <p class="note-hint muted">
-            Select text in the article to quote it. Notes stay with this
-            article.
-          </p>
-        </aside>
+<section id="reader" hidden aria-label="Reading session">
+  <header class="reader-session-header">
+    <div class="reader-brand">
+      <div class="brand">
+        <img class="brand-icon" src="/brand-icon.png" alt="" />Intel Sourcerer
       </div>
-      <footer class="nav-bar bottom">
-        <button data-action="previous">Previous</button>
-        <div class="progress-area">
-          <span class="position"></span
-          ><progress
-            class="queue-progress"
-            max="1"
-            value="0"
-            aria-label="Articles marked read"
-          ></progress>
-        </div>
-        <div class="nav-controls">
-          <button data-action="mark_next" class="primary" id="read-next">
-            Mark read &amp; next
-          </button>
-        </div>
-        <div class="up-next">
-          <span>Up next</span><strong class="next-title"></strong>
-        </div>
-      </footer>
-    </section>
+      <div class="reader-links">
+        <button data-action="home" type="button" class="exit-queue">Home</button
+        ><button data-action="exit" type="button" class="exit-queue">
+          Back to queue builder
+        </button>
+      </div>
+    </div>
+  </header>
+  <div class="focus-session" aria-label="Timed reading and notes">
+    <div class="focus-target">
+      <label for="focus-minutes">Target</label
+      ><input
+        id="focus-minutes"
+        type="number"
+        min="0.5"
+        max="240"
+        step="0.5"
+        value="4"
+        aria-label="Target minutes"
+      /><span>min</span>
+    </div>
+    <div class="focus-clock">
+      <strong id="focus-clock">Ready</strong
+      ><span id="focus-caption">Start when you’re ready</span
+      ><progress
+        id="focus-progress"
+        max="1"
+        value="0"
+        aria-label="Time elapsed"
+      ></progress>
+    </div>
+    <div class="focus-controls">
+      <button id="focus-start">Start timer</button
+      ><button id="focus-pause" hidden>Pause</button
+      ><button id="focus-finish" class="primary" hidden>
+        Finish reading &amp; notes</button
+      ><button id="focus-end" hidden>End attempt</button>
+    </div>
+  </div>
+  <div id="focus-message" role="status" hidden></div>
+  <div class="workspace">
+    <article
+      id="article-pane"
+      class="article-pane"
+      tabindex="0"
+      aria-label="Article"
+    >
+      <p class="eyebrow">SECURITY RESEARCH</p>
+      <h1 id="article-title"></h1>
+      <p id="article-meta" class="muted"></p>
+      <a id="original" target="_blank" rel="noopener noreferrer"
+        >Read original article</a
+      >
+      <div class="media-controls">
+        <label
+          ><input id="load-media" type="checkbox" /> Load article media</label
+        ><span class="muted">Loads images and videos from external sites.</span>
+      </div>
+      <hr />
+      <div id="article-body" class="markdown"></div>
+    </article>
+    <div
+      id="pane-divider"
+      role="separator"
+      tabindex="0"
+      aria-label="Resize article and notes panes"
+      aria-orientation="vertical"
+      aria-controls="article-pane"
+      aria-valuemin="30"
+      aria-valuemax="70"
+      aria-valuenow="50"
+      title="Drag to resize; arrow keys adjust; double-click to reset"
+    ></div>
+    <aside class="notes-pane" aria-label="Article notes">
+      <div class="notes-heading">
+        <h2>Notes</h2>
+        <span id="save-status" class="muted" role="status" aria-live="polite"
+          >Saved</span
+        >
+      </div>
+      <label class="sr-only" for="notes">Your notes for this article</label>
+      <div class="notes-toolbar" role="toolbar" aria-label="Note formatting">
+        <button
+          type="button"
+          data-format="bold"
+          aria-label="Bold"
+          title="Bold (⌘B / Ctrl+B)"
+        >
+          Bold</button
+        ><button type="button" data-format="highlight" aria-label="Highlight">
+          Highlight</button
+        ><button type="button" data-format="callout" aria-label="Callout">
+          Callout
+        </button>
+      </div>
+      <div
+        id="notes"
+        contenteditable="true"
+        role="textbox"
+        aria-multiline="true"
+        aria-label="Your notes for this article"
+        data-placeholder="What stands out? Jot down a takeaway, question, or follow-up…"
+      ></div>
+      <div class="note-tools">
+        <button id="quote-selection" type="button">
+          Add selected passage to notes</button
+        ><button data-action="unread" id="mark-unread" type="button">
+          Mark unread
+        </button>
+      </div>
+      <p class="note-hint muted">
+        Select text in the article to quote it. Notes stay with this article.
+      </p>
+    </aside>
+  </div>
+  <footer class="nav-bar bottom">
+    <button data-action="previous">Previous</button>
+    <div class="progress-area">
+      <span class="position"></span
+      ><progress
+        class="queue-progress"
+        max="1"
+        value="0"
+        aria-label="Articles marked read"
+      ></progress>
+    </div>
+    <div class="nav-controls">
+      <button data-action="next">Next</button>
+      <button data-action="mark_next" class="primary" id="read-next">
+        Mark read &amp; next
+      </button>
+    </div>
+    <div class="up-next">
+      <span>Up next</span><strong class="next-title"></strong>
+    </div>
+  </footer>
+</section>

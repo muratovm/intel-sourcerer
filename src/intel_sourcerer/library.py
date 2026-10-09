@@ -17,11 +17,24 @@ def export_article(db, url):
 
 
 def render_library(db, query="", notes_only=False, selected="", csrf_token=""):
+    rows = library_rows(db)
+    return render_library_rows(rows, query, notes_only, selected, csrf_token)
+
+
+def library_rows(db):
+    """Read private library records at the backend boundary."""
+    return [
+        dict(row)
+        for row in db.execute(
+            "SELECT a.*,s.name AS publisher FROM articles a JOIN sources s ON s.id=a.source_id ORDER BY julianday(a.published_at) DESC,a.title COLLATE NOCASE,a.url"
+        )
+    ]
+
+
+def render_library_rows(rows, query="", notes_only=False, selected="", csrf_token=""):
+    """Render a library from backend JSON without opening a database."""
     from .sessions import clean_notes
 
-    rows = db.execute(
-        "SELECT a.*,s.name AS publisher FROM articles a JOIN sources s ON s.id=a.source_id ORDER BY a.notes_updated_at DESC,a.published_at DESC"
-    ).fetchall()
     terms = query.casefold().split()
     matches = []
     for row in rows:
@@ -71,7 +84,11 @@ def render_library(db, query="", notes_only=False, selected="", csrf_token=""):
                 current_attribute="aria-current=true" if is_active else "",
                 publisher=escape(row["publisher"]),
                 title=escape(row["title"]),
-                published_date=escape(row["published_at"][:10]),
+                published_date=escape(
+                    row["published_at"][:10]
+                    + " · "
+                    + row["content_format"].capitalize()
+                ),
                 badges=badges,
             )
         )

@@ -1,0 +1,48 @@
+<section class="timed-stats">
+  <h2>Reading &amp; annotation pace</h2>
+  <div class="timed-metrics">
+    <p><strong>${completed}</strong> completed sessions</p>
+    <p><strong>${within}%</strong> within your target</p>
+    <p><strong>${estimate_within}%</strong> within estimated reading time</p>
+    <p><strong>${pace}</strong> words/min including notes</p>
+  </div>
+  <p class="muted">
+    Active time excludes pauses. Pace is article words divided by time spent
+    reading and annotating; it does not measure comprehension. Article
+    difficulty and note detail affect results. ${abandoned} abandoned attempts
+    are excluded.
+  </p>
+  <h3>Weekly pace</h3>
+  <div class="timed-table">
+    <table>
+      <thead>
+        <tr>
+          <th>Week starting (Toronto)</th>
+          <th>Weighted pace</th>
+          <th>Sessions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${weeks}
+      </tbody>
+    </table>
+  </div>
+  <h3>Recent sessions</h3>
+  <div class="timed-table">
+    <table>
+      <thead>
+        <tr>
+          <th>Article</th>
+          <th>Completed (UTC)</th>
+          <th>Target</th>
+          <th>Active time</th>
+          <th>Words/min</th>
+          <th>Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${history}
+      </tbody>
+    </table>
+  </div>
+</section>

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Guest reader · Intel Sourcerer</title><link rel="stylesheet" href="/reader.css"><script src="/guest.js" defer></script></head>
+<body><main class="auth-card guest-card">
+<div class="brand">Intel Sourcerer</div><h1>Read as a guest</h1>
+<p>Your queue and notes stay in this browser tab. No account or saved library is used.</p>
+<form id="guest-form">
+<label>Article files<input id="guest-files" type="file" multiple accept=".md,.markdown,.txt,.html,.htm,.pdf,.json"></label>
+<p class="muted">Markdown, text, HTML, PDFs, or an exported article JSON list.</p>
+<label>Title (for pasted text)<input id="guest-title" placeholder="Untitled article"></label>
+<label>Original article URL (optional)<input id="guest-url" type="url" placeholder="https://example.com/article"></label>
+<label>Paste article text or Markdown<textarea id="guest-text" rows="8" placeholder="Paste the article contents here…"></textarea></label>
+<button class="primary" type="submit" id="guest-start">Start reading</button>
+<p id="guest-error" role="alert" hidden></p>
+</form><p><a href="/login">Sign in to use your saved library</a></p>
+</main></body></html>

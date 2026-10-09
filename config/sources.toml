@@ -23,6 +23,14 @@ enabled = true
 parent_url = "https://www.anthropic.com/threat-intelligence"
 notes = "Dedicated threat intelligence reports index. Official RSS not verified; requires a future listing adapter."
 
+[[sources]]
+id = "anthropic-frontier-red-team"
+name = "Anthropic Frontier Red Team"
+source_type = "ai_lab"
+enabled = true
+parent_url = "https://www.anthropic.com/research/team/frontier-red-team"
+notes = "Frontier Red Team publications on cybersecurity, national security, and autonomous systems. Uses the Anthropic dated listing adapter; cybersecurity relevance filtering applies."
+
 # security_vendor
 
 [[sources]]
@@ -185,3 +193,14 @@ enabled = false
 parent_url = "https://www.recordedfuture.com/research"
 rss_url = "https://www.recordedfuture.com/feed"
 notes = "Original espionage, cybercrime, infrastructure, and geopolitical threat investigations. Working feed covers a broader publication than this research index; relevance filtering is needed."
+
+# research_org
+
+[[sources]]
+id = "metr"
+name = "METR"
+source_type = "research_org"
+enabled = true
+parent_url = "https://metr.org/research/"
+rss_url = "https://metr.org/feed.xml"
+notes = "Independent AI evaluation and threat research, including agent security, monitoring, and incident investigations. Official feed includes research, notes, and updates; cybersecurity relevance filtering applies."

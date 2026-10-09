@@ -76,6 +76,7 @@
           >
             Saved articles · newest first
           </p>
+          <h2 class="saved-articles-title">Saved Articles</h2>
           <div id="result-count" class="muted"></div>
           <div id="discovery-results"></div>
         </section>
@@ -89,19 +90,19 @@
             id="link-drop"
             class="link-drop"
             tabindex="0"
-            aria-label="Drop article links here"
+            aria-label="Drop links or media files here"
           >
-            <strong>Drop article links here</strong
+            <strong>Drop links or media files here</strong
             ><span class="muted"
-              >Add one or more URLs to build your queue.</span
+              >Add article or PDF URLs to build your queue.</span
             >
           </div>
           <form id="link-form" class="link-form">
             <label class="sr-only" for="article-url">Article URL</label
             ><input
               id="article-url"
-              type="url"
-              placeholder="https://…"
+              type="text"
+              placeholder="URL or local file path"
               required
             /><button id="add-link" type="submit">Add link</button>
           </form>

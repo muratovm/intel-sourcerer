@@ -86,8 +86,11 @@ async def import_articles(config, database, since, until):
                     result = await fetch_feed(client, feed)
                     if result.error: report['errors'].append(f'{source.id}: {result.error}')
                     candidates.update({a.url:a for a in result.articles})
-                elif source.id == 'anthropic':
-                    for index in [source.parent_url, 'https://www.anthropic.com/news']:
+                elif source.id in {'anthropic', 'anthropic-frontier-red-team'}:
+                    indexes = [source.parent_url]
+                    if source.id == 'anthropic':
+                        indexes.append('https://www.anthropic.com/news')
+                    for index in indexes:
                         try:
                             response = await client.get(index)
                             response.raise_for_status()

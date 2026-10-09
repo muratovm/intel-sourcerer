@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="user-id" content="__USER_ID__" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="csrf-token" content="${csrf_token}" />
     <script src="/library.js" defer></script>
@@ -27,13 +28,13 @@
           class="lib-drop"
           aria-label="Add article links"
         >
-          <span>Drop an article link here</span>
+          <span>Drop links or media files here</span>
           <form id="library-add-form">
             <label class="sr-only" for="library-url">Article URL</label
             ><input
               id="library-url"
-              type="url"
-              placeholder="Or paste an article URL"
+              type="text"
+              placeholder="URL or local file path"
               required
             /><button id="library-add" type="submit">Add article</button>
           </form>
@@ -88,6 +89,18 @@
           Delete article
         </button>
       </div>
+    </dialog>
+    <dialog id="rename-dialog" class="lib-dialog" aria-labelledby="rename-title">
+      <form id="rename-form">
+        <h2 id="rename-title">Rename article</h2>
+        <label for="article-new-title">Title</label>
+        <input id="article-new-title" type="text" required maxlength="500" />
+        <p id="rename-error" role="alert" hidden></p>
+        <div class="lib-dialog-actions">
+          <button id="cancel-rename" type="button">Cancel</button>
+          <button id="save-rename" type="submit" class="primary">Save title</button>
+        </div>
+      </form>
     </dialog>
   </body>
 </html>

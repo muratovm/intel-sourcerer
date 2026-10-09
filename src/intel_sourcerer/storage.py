@@ -26,6 +26,8 @@ def connect_database(path):
     );
     ''')
     columns = {row[1] for row in db.execute('PRAGMA table_info(articles)')}
+    if 'content_format' not in columns:
+        db.execute("ALTER TABLE articles ADD COLUMN content_format TEXT NOT NULL DEFAULT 'article'")
     if 'content_markdown' not in columns:
         db.execute('ALTER TABLE articles ADD COLUMN content_markdown TEXT')
     if 'media_json' not in columns:
@@ -53,6 +55,13 @@ def connect_database(path):
       WHEN NEW.is_read=1 AND OLD.is_read=0
       BEGIN INSERT OR IGNORE INTO article_reads(article_url,read_at) VALUES(NEW.url,strftime('%Y-%m-%dT%H:%M:%SZ','now')); END;
     """)
+    db.executescript("""CREATE TABLE IF NOT EXISTS timed_reading_sessions (
+      id TEXT PRIMARY KEY, article_url TEXT NOT NULL REFERENCES articles(url),
+      title TEXT NOT NULL, word_count INTEGER NOT NULL, target_seconds INTEGER NOT NULL,
+      estimated_seconds INTEGER NOT NULL, elapsed_seconds REAL NOT NULL DEFAULT 0,
+      started_at TEXT NOT NULL, resumed_at TEXT, finished_at TEXT,
+      status TEXT NOT NULL CHECK(status IN ('running','paused','completed','abandoned'))
+    );""")
     db.commit()
     return db
 

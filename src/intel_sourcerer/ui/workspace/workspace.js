@@ -1,4 +1,5 @@
 "use strict";
+const userStoragePrefix = "user:" + document.querySelector('meta[name="user-id"]').content + ":";
 const $ = (id) => document.getElementById(id);
 let standaloneURL = null;
 let state,
@@ -45,7 +46,7 @@ function show(view) {
     $(id).hidden = id !== view;
 }
 function queueKey() {
-  return `intel-scroll:${standaloneURL ? "standalone" : state.queue.id}:${currentArticle.url}`;
+  return `${userStoragePrefix}intel-scroll:${standaloneURL ? "standalone" : state.queue.id}:${currentArticle.url}`;
 }
 function stashScroll() {
   if (currentArticle && (standaloneURL || state?.queue)) {
@@ -55,7 +56,7 @@ function stashScroll() {
   }
 }
 function draftKey(url) {
-  return `intel-draft:${url}`;
+  return `${userStoragePrefix}intel-draft:${url}`;
 }
 function stashDraft() {
   if (noteModel) {
@@ -91,14 +92,14 @@ let draftQueue = [],
   draggingURL = null;
 function saveQueueDraft() {
   try {
-    localStorage.setItem("intel-queue-draft", JSON.stringify(draftQueue));
+    localStorage.setItem(userStoragePrefix + "intel-queue-draft", JSON.stringify(draftQueue));
   } catch {}
 }
 function renderSetup() {
   show("setup");
   $("builder-date").textContent = dateLabel(new Date());
   try {
-    const draft = JSON.parse(localStorage.getItem("intel-queue-draft"));
+    const draft = JSON.parse(localStorage.getItem(userStoragePrefix + "intel-queue-draft"));
     if (Array.isArray(draft))
       draftQueue = [
         ...new Set(
@@ -190,7 +191,7 @@ $("resume-reading").onclick = () => {
   renderQueue().catch((error) => notice(error.message));
 };
 function buildMeta(article) {
-  return `${article.publisher} · ${dateLabel(article.published_at)} · ${article.is_read ? "Read" : "Unread"}${article.has_notes ? " · Notted" : ""}`;
+  return readerMetadata(article);
 }
 function styleArticleStatus(meta, article) {
   const publisher = document.createElement("span");
@@ -198,7 +199,7 @@ function styleArticleStatus(meta, article) {
   publisher.textContent = article.publisher;
   meta.replaceChildren(
     publisher,
-    document.createTextNode(` · ${dateLabel(article.published_at)} · `),
+    document.createTextNode(` · ${article.content_format || "article"} · ${dateLabel(article.published_at)} · `),
   );
   const status = document.createElement("span");
   status.textContent = article.is_read ? "Read" : "Unread";
@@ -287,7 +288,16 @@ function renderBuilder() {
         renderBuilder();
       } else addToDraft(article.url);
     };
-    row.append(copy, tag, button);
+    const actions = document.createElement("div");
+    actions.className = "builder-article-actions";
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "builder-delete";
+    deleteButton.textContent = "Delete";
+    deleteButton.setAttribute("aria-label", `Delete article: ${article.title}`);
+    deleteButton.onclick = () => openArticleDelete(article);
+    actions.append(button, deleteButton);
+    row.append(copy, tag, actions);
     row.draggable = true;
     row.addEventListener("dragstart", (e) => {
       e.dataTransfer.setData("text/uri-list", article.url);
@@ -350,12 +360,16 @@ function renderBuilder() {
     row.addEventListener("drop", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (draggingURL) moveDraft(draggingURL, index);
-      else
+      if (draggingURL) {
+        moveDraft(draggingURL, index);
+      } else if (e.dataTransfer.files.length) {
+        importFiles(Array.from(e.dataTransfer.files));
+      } else {
         importLinks(
           e.dataTransfer.getData("text/uri-list") ||
             e.dataTransfer.getData("text/plain"),
         );
+      }
     });
     $("draft-queue").append(row);
   });
@@ -401,7 +415,7 @@ $("discovery-form").onsubmit = async (event) => {
 };
 async function importLinks(text) {
   const urls = [
-    ...new Set(text.split(/\s+/).filter((u) => /^https?:\/\//i.test(u))),
+    ...new Set(( /^(?:file:\/\/|\/|~\/)/i.test(text.trim()) ? text.trim().split(/\r?\n/).filter(Boolean) : text.split(/\s+/).filter((u) => /^https?:\/\//i.test(u)) )),
   ];
   if (!urls.length) {
     notice("Drop or paste an HTTP or HTTPS article link.");
@@ -440,6 +454,10 @@ $("link-drop").addEventListener("dragleave", () =>
 $("link-drop").addEventListener("drop", (event) => {
   event.preventDefault();
   $("link-drop").classList.remove("drag-over");
+  if (event.dataTransfer.files.length) {
+    importFiles(Array.from(event.dataTransfer.files));
+    return;
+  }
   importLinks(
     event.dataTransfer.getData("text/uri-list") ||
       event.dataTransfer.getData("text/plain"),
@@ -460,6 +478,26 @@ $("queue-form").onsubmit = async (event) => {
     $("start").disabled = false;
   }
 };
+// Estimate prose reading time at 200 words per minute; exclude media placeholders.
+function readingTimeLabel(article) {
+  if (["audio", "video"].includes(article.content_format)) return article.content_format === "audio" ? "Audio" : "Video";
+  if (article.url.startsWith("https://www.youtube.com/watch?v=")) return "Video";
+  const body = document.createElement("div");
+  body.innerHTML = article.body_html;
+  body
+    .querySelectorAll("[data-reading-exclude], figure, video, iframe")
+    .forEach((element) => element.remove());
+  const words = (body.textContent || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+  return `~${Math.max(1, Math.ceil(words / 200))} min read`;
+}
+
+function readerMetadata(article) {
+  return `${article.publisher} · ${dateLabel(article.published_at)} · ${readingTimeLabel(article)} · ${article.is_read ? "Read" : "Unread"}${article.has_notes ? " · Notted" : ""}`;
+}
+
 async function renderQueue() {
   const q = standaloneURL
     ? {
@@ -519,13 +557,13 @@ async function renderQueue() {
   $("save-status").textContent =
     text === article.notes ? "Saved" : "Unsaved draft";
   $("article-title").textContent = article.title;
-  $("article-meta").textContent =
-    `${article.publisher} · ${dateLabel(article.published_at)} · ${article.is_read ? "Read" : "Unread"}${article.has_notes ? " · Notted" : ""}`;
+  $("article-meta").textContent = readerMetadata(article);
   const source = new URL(article.url);
   $("original").hidden = !["https:", "http:"].includes(source.protocol);
   $("original").href = article.url;
   $("article-body").innerHTML = article.body_html;
   renderMedia();
+  window.renderArticleMath?.();
   const next = q.items[q.cursor + 1];
   document
     .querySelectorAll(".position")
@@ -548,6 +586,9 @@ async function renderQueue() {
     q.cursor === q.items.length - 1 ? "Finish" : "Next";
   $("mark-unread").hidden = !article.is_read;
   show("reader");
+  document.dispatchEvent(
+    new CustomEvent("reader-article", { detail: article }),
+  );
   setBusy(false);
   document
     .querySelectorAll(
@@ -588,8 +629,7 @@ function saveNow() {
           currentArticle.has_notes = !!container.textContent
             .replace(/\u200b/g, "")
             .trim();
-          $("article-meta").textContent =
-            `${currentArticle.publisher} · ${dateLabel(currentArticle.published_at)} · ${currentArticle.is_read ? "Read" : "Unread"}${currentArticle.has_notes ? " · Notted" : ""}`;
+          $("article-meta").textContent = readerMetadata(currentArticle);
         }
         if (noteModel === model) {
           $("save-status").textContent =
@@ -636,6 +676,7 @@ document.querySelectorAll("[data-action]").forEach(
       stashScroll();
       try {
         await saveNow();
+        await window.pauseFocusTimer?.();
         if (button.dataset.action === "home") {
           standaloneURL = null;
           state = await api("/api/state");
@@ -760,18 +801,19 @@ $("new-queue").onclick = async () => {
 
 let mediaEnabled = false;
 try {
-  mediaEnabled = localStorage.getItem("intel-load-media") === "true";
+  mediaEnabled = localStorage.getItem(userStoragePrefix + "intel-load-media") === "true";
 } catch {}
 $("load-media").checked = mediaEnabled;
 $("load-media").addEventListener("change", () => {
   mediaEnabled = $("load-media").checked;
   try {
-    localStorage.setItem("intel-load-media", String(mediaEnabled));
+    localStorage.setItem(userStoragePrefix + "intel-load-media", String(mediaEnabled));
   } catch {}
   const scroll = $("article-pane").scrollTop;
   if (currentArticle) {
     $("article-body").innerHTML = currentArticle.body_html;
     renderMedia();
+    window.renderArticleMath?.();
     $("article-pane").scrollTop = scroll;
   }
 });
@@ -802,13 +844,14 @@ function embedURL(url) {
   return null;
 }
 function renderMedia() {
-  if (!mediaEnabled) return;
+  const isVideoArticle = ["audio", "video"].includes(currentArticle?.content_format) || currentArticle?.url.startsWith("https://www.youtube.com/watch?v=");
+  if (!mediaEnabled && !isVideoArticle) return;
   for (const block of $("article-body").querySelectorAll(
     "blockquote[data-media-url]",
   )) {
     let url;
     try {
-      url = new URL(block.dataset.mediaUrl);
+      url = new URL(block.dataset.mediaUrl, location.origin);
     } catch {
       continue;
     }
@@ -819,6 +862,10 @@ function renderMedia() {
       media.alt = block.dataset.mediaDescription;
       media.loading = "lazy";
       media.decoding = "async";
+    } else if (block.dataset.mediaKind === "audio") {
+      media = document.createElement("audio");
+      media.controls = true;
+      media.preload = "metadata";
     } else {
       const embed = embedURL(url);
       if (embed) {
@@ -855,6 +902,29 @@ function renderMedia() {
     );
     media.src = url.href;
     block.prepend(media);
+    if (["AUDIO", "VIDEO"].includes(media.tagName)) {
+      const controls = document.createElement("div");
+      controls.className = "playback-tools";
+      const label = document.createElement("label");
+      label.textContent = "Speed ";
+      const speed = document.createElement("select");
+      for (const rate of [0.75, 1, 1.25, 1.5, 2]) {
+        const option = new Option(`${rate}×`, rate, false, rate === 1);
+        speed.append(option);
+      }
+      speed.onchange = () => { media.playbackRate = Number(speed.value); };
+      label.append(speed);
+      const timestamp = document.createElement("button");
+      timestamp.type = "button";
+      timestamp.textContent = "Add timestamp to notes";
+      timestamp.onclick = () => {
+        const seconds = Math.floor(media.currentTime || 0);
+        const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+        insertCallout(`At ${time} — `);
+      };
+      controls.append(label, timestamp);
+      media.after(controls);
+    }
   }
 }
 
@@ -873,11 +943,11 @@ function setPaneWidth(value, persist = true) {
   );
   if (persist)
     try {
-      localStorage.setItem("intel-pane-width", String(panePercent));
+      localStorage.setItem(userStoragePrefix + "intel-pane-width", String(panePercent));
     } catch {}
 }
 try {
-  const stored = Number(localStorage.getItem("intel-pane-width"));
+  const stored = Number(localStorage.getItem(userStoragePrefix + "intel-pane-width"));
   if (Number.isFinite(stored) && stored >= 30 && stored <= 70)
     setPaneWidth(stored, false);
 } catch {}
@@ -1206,3 +1276,71 @@ $("notes").addEventListener("paste", (event) => {
   );
   noteChanged();
 });
+
+// Finder drops provide file bytes, rather than a usable local filesystem path.
+async function importFiles(files) {
+  $("add-link").disabled = true;
+  const feedback = document.getElementById("link-status");
+  feedback.hidden = false;
+  let lastURL = null;
+  try {
+    for (const file of files.slice(0, 20)) {
+      if (!(document.body.classList.contains("temporary-session") ? /\.(pdf|md|markdown|html|htm|txt|json)$/i : /\.(pdf|mp3|m4a|ogg|wav|mp4|webm|eml|pptx)$/i).test(file.name)) throw new Error("Unsupported file type.");
+      if (file.size > (/\.(pdf|eml|pptx)$/i.test(file.name) ? 20000000 : 100000000)) throw new Error("Documents are limited to 20 MB; audio/video to 100 MB.");
+      feedback.textContent = `Importing ${file.name}…`;
+      const response = await fetch("/api/file-upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream", "X-CSRF-Token": token, "X-Filename": encodeURIComponent(file.name) },
+        body: file,
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "File import failed.");
+      state = await api("/api/state");
+        addToDraft(result.url);
+    }
+    feedback.textContent = "Files added.";
+  } catch (error) {
+    feedback.textContent = error.message;
+  } finally {
+    $("add-link").disabled = false;
+  }
+}
+
+
+let articleToDelete = null;
+function openArticleDelete(article) {
+  articleToDelete = article;
+  $("delete-title").textContent = "Delete this article?";
+  $("delete-error").hidden = true;
+  $("delete-dialog").showModal();
+}
+$("cancel-delete").onclick = () => $("delete-dialog").close();
+$("delete-dialog").addEventListener("cancel", (event) => {
+  if ($("confirm-delete").disabled) event.preventDefault();
+});
+$("confirm-delete").onclick = async () => {
+  const article = articleToDelete;
+  if (!article) return;
+  $("confirm-delete").disabled = true;
+  $("cancel-delete").disabled = true;
+  $("delete-error").hidden = true;
+  try {
+    await api("/api/delete-article", {url: article.url});
+    draftQueue = draftQueue.filter(url => url !== article.url);
+    saveQueueDraft();
+    try {
+      const storage = document.body.classList.contains("temporary-session") ? sessionStorage : localStorage;
+      storage.removeItem(userStoragePrefix + "intel-draft:" + article.url);
+    } catch {}
+    state = await api("/api/state");
+    renderBuilder();
+    $("delete-dialog").close();
+    articleToDelete = null;
+  } catch (error) {
+    $("delete-error").textContent = error.message;
+    $("delete-error").hidden = false;
+  } finally {
+    $("confirm-delete").disabled = false;
+    $("cancel-delete").disabled = false;
+  }
+};

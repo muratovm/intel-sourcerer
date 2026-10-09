@@ -1,22 +1,35 @@
 """Yearly first-read activity, displayed in Toronto local time."""
 
 from .templates import render_template
+from .timed_reading import session_stats_data, render_session_stats_data
 from collections import Counter
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 
+def stats_data(db):
+    return {
+        "reads": [row[0] for row in db.execute("SELECT read_at FROM article_reads")],
+        "timing": session_stats_data(db),
+    }
+
+
 def render_stats(db, now=None):
+    return render_stats_data(stats_data(db), now)
+
+
+def render_stats_data(data, now=None):
+    """Build the heatmap from data provided by the backend."""
     zone = ZoneInfo("America/Toronto")
     today = (now or datetime.now(zone)).astimezone(zone).date()
     counts = Counter()
     undated = 0
-    for row in db.execute("SELECT read_at FROM article_reads"):
-        if not row[0]:
+    for read_at in data["reads"]:
+        if not read_at:
             undated += 1
             continue
         day = (
-            datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+            datetime.fromisoformat(read_at.replace("Z", "+00:00"))
             .astimezone(zone)
             .date()
         )
@@ -84,4 +97,7 @@ def render_stats(db, now=None):
         today_year2=today.year,
         day_cells="".join(cells),
         undated=undated,
+        timed_sessions=render_session_stats_data(
+            data["timing"]["sessions"], data["timing"]["abandoned"]
+        ),
     )

@@ -1,3 +1,7 @@
+# Current runtime
+
+The viewer and persistence service are independently deployable. See [hosting.md](hosting.md) for the current diagram, responsibilities, and commands. The design below is the earlier project proposal.
+
 # Intel Sourcerer — proposed local architecture
 
 This describes the planned application, not an implemented system.
