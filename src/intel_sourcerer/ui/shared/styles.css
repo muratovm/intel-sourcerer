@@ -2262,3 +2262,25 @@ audio.article-media { width:100%; height:54px; }
 }
 
 .queue-builder .saved-articles-title { margin: 10px 0 2px; font-size: 18px; line-height: 1.3; flex-shrink: 0; }
+
+/* A clear entry point for saved-account and temporary reading. */
+.auth-page { min-height: 100dvh; padding: 32px 20px; display: grid; place-items: center; background: radial-gradient(ellipse at 50% 0%, #eaf2ff, #f8fbff 45%, #fff 80%); }
+.auth-page .auth-card { width: 100%; max-width: 440px; margin: 0; padding: 32px; border-radius: 16px; box-shadow: 0 12px 40px #15376b0a; }
+.auth-card .brand { font-size: 22px; margin-bottom: 24px; }
+.auth-card h1 { font-size: 26px; margin: 0 0 8px; letter-spacing: -.6px; }
+.auth-description { color: var(--muted); font-size: 14px; line-height: 1.55; margin: 0; }
+.auth-error:empty { display: none; }
+.auth-error:not(:empty) { color: #b42318; background: #fff1f0; border: 1px solid #f0b5af; border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+.auth-card .auth-form { gap: 8px; margin: 24px 0 0; }
+.auth-form label { font-size: 13px; font-weight: 600; }
+.auth-form input { width: 100%; min-height: 44px; margin-bottom: 8px; }
+.auth-form button { min-height: 44px; margin-top: 4px; }
+.auth-card input:focus-visible, .auth-card a:focus-visible, .auth-card button:focus-visible { outline: 3px solid #b5d0ff; outline-offset: 2px; }
+.auth-card .guest-option { margin-top: 24px; padding-top: 0; border: 0; }
+.auth-divider { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; margin-bottom: 20px; }
+.auth-divider::before, .auth-divider::after { content: ''; height: 1px; flex: 1; background: var(--border); }
+.guest-option h2 { margin: 0 0 6px; font-size: 17px; }
+.guest-option .muted { font-size: 13px; line-height: 1.5; margin: 0 0 12px; }
+.auth-card .guest-button { display: flex; justify-content: space-between; align-items: center; width: 100%; min-height: 44px; font-size: 14px; font-weight: 600; }
+.auth-guest-hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 10px 0 0; }
+@media (max-width: 480px) { .auth-page { padding: 20px 12px; } .auth-page .auth-card { padding: 24px; } }

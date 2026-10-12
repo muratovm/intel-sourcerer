@@ -1,3 +1,18 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · Intel Sourcerer</title><link rel="stylesheet" href="/reader.css"></head>
-<body><main class="auth-card"><div class="brand">Intel Sourcerer</div><h1>${title}</h1><p>${description}</p><p role="alert">${error}</p>${content}</main></body></html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${title} · Intel Sourcerer</title>
+    <link rel="stylesheet" href="/reader.css" />
+  </head>
+  <body class="auth-page">
+    <main class="auth-card">
+      <div class="brand"><img class="brand-icon" src="/brand-icon.png" alt="" />Intel Sourcerer</div>
+      <h1>${title}</h1>
+      <p class="auth-description">${description}</p>
+      <p class="auth-error" role="alert">${error}</p>
+      ${content}
+    </main>
+  </body>
+</html>

@@ -1,1 +1,8 @@
-<form method="post" action="${action}"><input type="hidden" name="csrf_token" value="${csrf}"><label>Username<input name="username" autocomplete="username" minlength="3" maxlength="64" required></label><label>Password<input name="password" type="password" autocomplete="${autocomplete}" minlength="12" maxlength="1024" required></label><button type="submit" class="primary">${button}</button></form>
+<form method="post" action="${action}" class="auth-form">
+  <input type="hidden" name="csrf_token" value="${csrf}" />
+  <label for="auth-username">Username</label>
+  <input id="auth-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="64" placeholder="Your username" required />
+  <label for="auth-password">Password</label>
+  <input id="auth-password" name="password" type="password" autocomplete="${autocomplete}" minlength="12" maxlength="1024" placeholder="Your password" required />
+  <button type="submit" class="primary">${button}</button>
+</form>

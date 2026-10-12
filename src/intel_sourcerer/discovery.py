@@ -81,32 +81,40 @@ async def import_link(database, url):
                 raise ValueError('This PDF exceeds the 20 MB limit.')
             is_pdf=True
         else:
-            async with httpx.AsyncClient(timeout=20,headers={'User-Agent':'IntelSourcerer/0.1'}) as client:
-                for _ in range(6):
-                    url=await asyncio.to_thread(public_url,url)
-                    async with client.stream('GET',url) as response:
-                        if response.is_redirect:
-                            url=urljoin(url,response.headers.get('location',''));continue
-                        if response.status_code in {401,403,429} and (urlsplit(url).hostname or '').removeprefix('www.') in {'x.com','twitter.com','linkedin.com','bsky.app','mastodon.social','reddit.com'}:
-                            return save_item(database,url,'Social post',f'This platform restricts automated access. Saved as a bookmark.\n\n[Open original post]({url})','social',urlsplit(url).hostname)
-                        response.raise_for_status()
-                        content_type=response.headers.get('content-type','').lower()
-                        chunks=[];size=0
-                        async for chunk in response.aiter_bytes():
-                            size+=len(chunk)
-                            if size>20_000_000:raise ValueError('This article or PDF exceeds the 20 MB limit.')
-                            chunks.append(chunk)
-                        payload=b''.join(chunks)
-                        if Path(urlsplit(url).path).suffix.lower() in {'.eml','.pptx'}:
-                            return await import_file(database,payload,unquote(Path(urlsplit(url).path).name))
-                        is_pdf='application/pdf' in content_type or payload[:1024].lstrip().startswith(b'%PDF-')
-                        if not is_pdf and ('xml' in content_type or payload.lstrip().startswith((b'<?xml', b'<rss', b'<feed'))):
-                            from .media_import import import_podcast_feed
-                            return await import_podcast_feed(database,payload,url)
-                        if not is_pdf and 'html' not in content_type:raise ValueError('This link must point to an HTML article or PDF.')
-                        html=payload.decode('utf-8',errors='replace') if not is_pdf else ''
-                        break
-                else:raise ValueError('Too many redirects for this article.')
+            from .arxiv import preferred_article
+            preferred = await asyncio.to_thread(preferred_article, url)
+            if preferred:
+                html = preferred['html']
+                content_url = preferred['content_url']
+                is_pdf = False
+            else:
+                async with httpx.AsyncClient(timeout=20,headers={'User-Agent':'IntelSourcerer/0.1'}) as client:
+                    for _ in range(6):
+                        url=await asyncio.to_thread(public_url,url)
+                        async with client.stream('GET',url) as response:
+                            if response.is_redirect:
+                                url=urljoin(url,response.headers.get('location',''));continue
+                            if response.status_code in {401,403,429} and (urlsplit(url).hostname or '').removeprefix('www.') in {'x.com','twitter.com','linkedin.com','bsky.app','mastodon.social','reddit.com'}:
+                                return save_item(database,url,'Social post',f'This platform restricts automated access. Saved as a bookmark.\n\n[Open original post]({url})','social',urlsplit(url).hostname)
+                            response.raise_for_status()
+                            content_type=response.headers.get('content-type','').lower()
+                            chunks=[];size=0
+                            async for chunk in response.aiter_bytes():
+                                size+=len(chunk)
+                                if size>20_000_000:raise ValueError('This article or PDF exceeds the 20 MB limit.')
+                                chunks.append(chunk)
+                            payload=b''.join(chunks)
+                            if Path(urlsplit(url).path).suffix.lower() in {'.eml','.pptx'}:
+                                return await import_file(database,payload,unquote(Path(urlsplit(url).path).name))
+                            is_pdf='application/pdf' in content_type or payload[:1024].lstrip().startswith(b'%PDF-')
+                            if not is_pdf and ('xml' in content_type or payload.lstrip().startswith((b'<?xml', b'<rss', b'<feed'))):
+                                from .media_import import import_podcast_feed
+                                return await import_podcast_feed(database,payload,url)
+                            if not is_pdf and 'html' not in content_type:raise ValueError('This link must point to an HTML article or PDF.')
+                            html=payload.decode('utf-8',errors='replace') if not is_pdf else ''
+                            break
+                    else:raise ValueError('Too many redirects for this article.')
+        content_url = preferred['content_url'] if local_path is None and preferred else url
         now=datetime.now(timezone.utc);published=now
         if is_pdf:
             title,content,markdown=await asyncio.to_thread(extract_pdf,payload,url)
@@ -121,7 +129,7 @@ async def import_link(database, url):
                 markdown=f'Saved social link. This platform did not expose readable post text. Open the original to view it.\n\n[Open post]({url})'
                 return save_item(database,url,title or 'Social post',markdown,'social',urlsplit(url).hostname)
             if not content:raise ValueError('No readable article text found. Try the publisher’s direct article link.')
-            markdown,media=extract_markdown(html,url)
+            markdown,media=extract_markdown(html,content_url)
             stamp=soup.find('meta',property='article:published_time') or soup.find('time',datetime=True)
             if stamp:
                 try:published=datetime.fromisoformat((stamp.get('content') or stamp.get('datetime')).replace('Z','+00:00'));published=published if published.tzinfo else published.replace(tzinfo=timezone.utc)

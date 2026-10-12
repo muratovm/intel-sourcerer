@@ -122,6 +122,11 @@ def load_article(value):
     parsed = urlsplit(value)
     remote = parsed.scheme in {"http", "https"}
     if remote:
+        from .arxiv import preferred_article
+
+        preferred = preferred_article(value)
+        if preferred:
+            return preferred
         with httpx.Client(timeout=30, follow_redirects=True) as client:
             response = client.get(value)
             response.raise_for_status()
@@ -314,9 +319,15 @@ def public_link(value):
     return addresses[0][4][0]
 
 
-def load_public_article(value):
+def load_public_article(value, *, prefer_arxiv=True):
     """Validate every redirect and bound downloaded article content."""
     public_link(value)
+    if prefer_arxiv:
+        from .arxiv import preferred_article
+
+        preferred = preferred_article(value)
+        if preferred:
+            return preferred
     with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
         for _ in range(6):
             address = public_link(value)

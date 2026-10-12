@@ -24,6 +24,17 @@ def extract_markdown(html, url):
         root = main
     else:
         root = max(articles, key=lambda a: len(a.get_text())) if articles else main or soup.body or soup
+    math_tokens = {}
+    import uuid
+    math_prefix = "ARXIVMATH" + uuid.uuid4().hex
+    # LaTeXML supplies exact TeX alongside MathML; preserve it for KaTeX.
+    for math in list(root.find_all('math')):
+        tex = math.get('alttext')
+        if tex:
+            display = math.get('display') == 'block' or 'ltx_Math' in math.get('class', []) and math.find_parent(class_='ltx_equation') is not None
+            key = math_prefix + str(len(math_tokens))
+            math_tokens[key] = ('\n\n$$' + tex + '$$\n\n') if display else '$' + tex + '$'
+            math.replace_with(soup.new_string(key))
     # Hero images can live outside the article element; publisher metadata is a fallback.
     header_image = None
     header_alt = 'Article header image'
@@ -103,6 +114,8 @@ def extract_markdown(html, url):
     for tag in root.select('svg, canvas'):
         tag.decompose()
     result = markdownify(str(root), heading_style='ATX', bullets='-', strip=['div','span']).strip()
+    for key, value in math_tokens.items():
+        result = result.replace(key, value)
     return result, media
 
 
