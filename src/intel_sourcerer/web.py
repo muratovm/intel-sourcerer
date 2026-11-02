@@ -1,6 +1,7 @@
 """A small, browser interface for saved articles."""
 
 import argparse
+import os
 from datetime import datetime
 from .templates import UI_ROOT, load_template, render_template
 from html import escape
@@ -20,6 +21,16 @@ from .importer import import_articles
 from contextlib import closing
 from bs4 import BeautifulSoup
 
+from .iocs import extract_iocs
+from .reading_state import (
+    delete_highlight,
+    get_position,
+    list_highlights,
+    save_highlight,
+    save_position,
+    set_triage,
+    week_counts,
+)
 from .storage import connect_database
 from .sessions import (
     session_db,
@@ -35,7 +46,7 @@ from .sessions import (
 from urllib.parse import urlsplit, parse_qs, urlencode
 from zoneinfo import ZoneInfo
 
-from .content import render_markdown
+from .content import arrange_media, format_label, render_article_html, render_markdown
 from .timed_reading import session_state, timer_action
 
 STYLE = """
@@ -76,12 +87,34 @@ a { color: #1d4ed8; text-underline-offset: 3px; }
 """
 
 
+
+APP_HEAD = (
+    '<link rel="manifest" href="/manifest.webmanifest" />'
+    '<meta name="theme-color" content="#071f4a" />'
+    '<link rel="apple-touch-icon" href="/icon-192.png" />'
+    '<script src="/app.js"></script>'
+)
+STATIC_FILES = {
+    "/app.js": ("shared/app.js", "text/javascript; charset=utf-8"),
+    "/sw.js": ("shared/sw.js", "text/javascript; charset=utf-8"),
+    "/save.js": ("shared/save.js", "text/javascript; charset=utf-8"),
+    "/manifest.webmanifest": ("shared/manifest.webmanifest", "application/manifest+json"),
+    "/icon-192.png": ("shared/icon-192.png", "image/png"),
+    "/icon-512.png": ("shared/icon-512.png", "image/png"),
+}
+
+
+def frame_ancestors():
+    """Pages that may embed this app. Nothing by default, to protect the login from clickjacking."""
+    return os.environ.get("INTEL_SOURCERER_FRAME_ANCESTORS", "'none'")
+
+
 def read_articles(database):
     """Open the existing database read-only; never create an empty replacement."""
     uri = Path(database).resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True)) as db, db:
         db.row_factory = sqlite3.Row
-        return db.execute("""SELECT a.title,a.url,a.published_at,a.content_text,a.content_markdown,a.is_read,a.notes,a.notes_format,a.notes_updated_at,a.content_format,s.name AS publisher
+        return db.execute("""SELECT a.title,a.url,a.published_at,a.content_text,a.content_markdown,a.content_html,a.is_read,a.notes,a.notes_format,a.notes_updated_at,a.content_format,a.triage,s.name AS publisher
             FROM articles a JOIN sources s ON s.id=a.source_id
             WHERE s.enabled=1 ORDER BY a.published_at DESC,a.title""").fetchall()
 
@@ -110,8 +143,15 @@ def render_page(articles, csrf_token="", open_url=None):
         )
         keys = article.keys()
         markdown = article["content_markdown"] if "content_markdown" in keys else None
-        body = render_markdown(markdown) if markdown else escape(text)
-        content_class = "markdown" if markdown else "content"
+        clean_html = article["content_html"] if "content_html" in keys else None
+        body = (
+            render_article_html(clean_html)
+            if clean_html
+            else render_markdown(markdown)
+            if markdown
+            else escape(text)
+        )
+        content_class = "markdown" if clean_html or markdown else "content"
         is_read = bool(article["is_read"]) if "is_read" in keys else False
         status = "Read" if is_read else "Unread"
         action = "Mark unread" if is_read else "Mark read"
@@ -168,6 +208,14 @@ def create_server(
 
     accounts = Accounts(database, config) if auth_enabled else None
     base_database, base_config, default_csrf = database, config, csrf_token
+
+    migrated = {str(database)}
+
+    def ensure_schema(path):
+        """Upgrade each account's database once, the first time this server sees it."""
+        if str(path) not in migrated:
+            connect_database(path).close()
+            migrated.add(str(path))
 
     class Handler(BaseHTTPRequestHandler):
         def service_authorized(self):
@@ -256,6 +304,7 @@ def create_server(
                 return None
             self.user_id, self.is_admin = session["user_id"], bool(session["admin"])
             self.session = session
+            ensure_schema(session["database_path"])
             return session["database_path"], session["config_path"], session["csrf"]
 
         def account_page(self, error="", status=200):
@@ -373,8 +422,9 @@ def create_server(
                     )
                     if accounts and getattr(self, "user_id", None):
                         body = body.replace(
-                            "</nav>", '<a href="/account">Account</a></nav>'
+                            "</nav>", '<a href="/account">Account</a></nav>', 1
                         )
+                    body = body.replace("</title>", "</title>" + APP_HEAD, 1)
                 body = body.encode()
             self.send_response(status)
             self.send_header("Content-Type", content_type)
@@ -382,7 +432,7 @@ def create_server(
             self.send_header("Cache-Control", "no-store")
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' https: http:; media-src 'self' https: http:; frame-src https://www.youtube-nocookie.com https://player.vimeo.com; base-uri 'none'; frame-ancestors 'none'",
+                "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; img-src 'self' https: http:; media-src 'self' https: http:; frame-src https://www.youtube-nocookie.com https://player.vimeo.com; base-uri 'none'; frame-ancestors " + frame_ancestors(),
             )
             self.send_header("X-Content-Type-Options", "nosniff")
             if getattr(self, "pending_cookie", None):
@@ -408,6 +458,19 @@ def create_server(
                 )
                 return
             if not self.service_authorized():
+                return
+            if not api_only and path in STATIC_FILES:
+                name, content_type = STATIC_FILES[path]
+                self.respond((UI_ROOT / name).read_bytes(), content_type)
+                return
+            if not api_only and path == "/save":
+                # Public: a link from another site arrives without the Strict session cookie.
+                self.respond(
+                    load_template("shared/save.html").replace(
+                        "__TOKEN__", "" if accounts else default_csrf
+                    ),
+                    "text/html; charset=utf-8",
+                )
                 return
             if path == "/api/viewer-session" and accounts:
                 self.viewer_session()
@@ -630,8 +693,12 @@ def create_server(
                                             "publisher",
                                             "notes_updated_at",
                                             "content_format",
+                                            "triage",
                                         )
                                     },
+                                    format_label=format_label(
+                                        r["content_format"], r["publisher"]
+                                    ),
                                     note_preview=BeautifulSoup(
                                         r["notes"] or "", "html.parser"
                                     ).get_text(" ", strip=True)
@@ -645,7 +712,11 @@ def create_server(
                                 for r in read_articles(database)
                             ]
                             self.respond(
-                                {"articles": articles, "queue": queue_state(db)}
+                                {
+                                    "articles": articles,
+                                    "queue": queue_state(db),
+                                    "week": week_counts(db),
+                                }
                             )
                         elif path == "/api/article":
                             url = parse_qs(urlsplit(self.path).query).get("url", [""])[
@@ -659,7 +730,9 @@ def create_server(
                                 self.respond({"error": "Article not found"}, status=404)
                                 return
                             html = (
-                                render_markdown(row["content_markdown"])
+                                render_article_html(row["content_html"])
+                                if row["content_html"]
+                                else render_markdown(row["content_markdown"])
                                 if row["content_markdown"]
                                 else "<p>"
                                 + escape(
@@ -673,44 +746,13 @@ def create_server(
                                 for node in list(title.previous_siblings):
                                     node.extract()
                                 title.decompose()
-                            for block in soup.find_all("blockquote"):
-                                heading = block.find("strong")
-                                if not heading:
-                                    continue
-                                kind = (
-                                    heading.get_text()
-                                    .strip()
-                                    .removesuffix(" placeholder:")
-                                    .lower()
-                                )
-                                if heading.get_text().strip() not in {
-                                    "Image placeholder:",
-                                    "Video placeholder:",
-                                    "Audio placeholder:",
-                                    "Embedded media placeholder:",
-                                }:
-                                    continue
-                                link = block.find("a", href=True)
-                                if link and (
-                                    link["href"].startswith(
-                                        ("/pdf-assets/", "/local-media/")
-                                    )
-                                    or urlsplit(link["href"]).scheme
-                                    in {
-                                        "http",
-                                        "https",
-                                    }
-                                ):
-                                    block["data-media-kind"] = kind
-                                    block["data-media-url"] = link["href"]
-                                    block["data-media-description"] = (
-                                        heading.parent.get_text(" ", strip=True)
-                                        .split("placeholder:", 1)[-1]
-                                        .strip()
-                                    )
+                            arrange_media(soup, row["title"], row["url"])
                             self.respond(
                                 dict(
                                     content_format=row["content_format"],
+                                    format_label=format_label(
+                                        row["content_format"], row["publisher"]
+                                    ),
                                     url=row["url"],
                                     title=row["title"],
                                     published_at=row["published_at"],
@@ -723,6 +765,10 @@ def create_server(
                                     notes_format=row["notes_format"],
                                     notes_revision=row["notes_revision"],
                                     body_html=str(soup),
+                                    body_format="html" if row["content_html"] else "markdown",
+                                    highlights=list_highlights(db, row["url"]),
+                                    iocs=extract_iocs(str(soup)),
+                                    position=get_position(db, row["url"]),
                                 )
                             )
                         else:
@@ -749,7 +795,7 @@ def create_server(
             self.send_header("Cache-Control", "no-store")
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+                "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors " + frame_ancestors(),
             )
             self.end_headers()
             self.wfile.write(content)
@@ -916,6 +962,24 @@ def create_server(
                                     data.get("format", "plain"),
                                 )
                             }
+                        elif self.path == "/api/highlights":
+                            result = save_highlight(
+                                db,
+                                data.get("url"),
+                                data.get("quote"),
+                                data.get("prefix", ""),
+                                data.get("suffix", ""),
+                            )
+                        elif self.path == "/api/highlight-delete":
+                            result = delete_highlight(db, data.get("id"))
+                        elif self.path == "/api/position":
+                            result = save_position(
+                                db, data.get("url"), data.get("fraction")
+                            )
+                        elif self.path == "/api/triage":
+                            result = set_triage(
+                                db, data.get("urls"), data.get("decision")
+                            )
                         elif self.path == "/api/rename-article":
                             result = rename_article(
                                 db, data.get("url"), data.get("title")

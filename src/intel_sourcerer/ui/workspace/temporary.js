@@ -47,7 +47,7 @@
     const parsed = model.sources.length ? await parseSources(model.sources) : [];
     model.articles = parsed.map(article => {
       const previous = model.articles.find(item => item.url === article.url);
-      return previous ? {...article,...Object.fromEntries(['notes','notes_format','notes_revision','is_read','has_notes','notes_updated_at'].map(key => [key,previous[key]]))} : article;
+      return previous ? {...article,...Object.fromEntries(['notes','notes_format','notes_revision','is_read','has_notes','notes_updated_at','highlights','position'].map(key => [key,previous[key]]))} : article;
     });
     remember();
   });
@@ -145,14 +145,33 @@
         const container = document.createElement('div');
         container.innerHTML = data.text;
         for (const element of [...container.querySelectorAll('*')]) {
-          if (!['P','DIV','BR','STRONG','B','EM','I','MARK','BLOCKQUOTE','UL','OL','LI'].includes(element.tagName)) element.replaceWith(...element.childNodes);
-          else for (const attribute of [...element.attributes]) element.removeAttribute(attribute.name);
+          const href = element.tagName === 'A' && /^(https?:|mailto:)/i.test((element.getAttribute('href') || '').trim()) ? element.getAttribute('href').trim() : '';
+          if (!href && !['P','DIV','BR','STRONG','B','EM','I','MARK','BLOCKQUOTE','UL','OL','LI','PRE','CODE'].includes(element.tagName)) element.replaceWith(...element.childNodes);
+          else {
+            const checklist = element.tagName === 'UL' && element.classList.contains('checklist'), checked = element.tagName === 'LI' && element.dataset.checked === 'true';
+            for (const attribute of [...element.attributes]) element.removeAttribute(attribute.name);
+            if (checklist) element.className = 'checklist';
+            if (checked) element.dataset.checked = 'true';
+            if (href) { element.setAttribute('href', href); element.setAttribute('target', '_blank'); element.setAttribute('rel', 'noopener noreferrer'); }
+          }
         }
         article.notes = container.innerHTML;
         article.notes_format = 'html';
         article.has_notes = !!container.textContent.trim();
         article.notes_updated_at = new Date().toISOString();
         result = {revision: ++article.notes_revision};
+      } else if (path === '/api/highlights' && data) {
+        const article = model.articles.find(a => a.url === data.url);
+        if (!article) throw new Error('Article not found.');
+        result = {id: crypto.randomUUID(), quote: data.quote, prefix: data.prefix || '', suffix: data.suffix || '', created_at: new Date().toISOString()};
+        (article.highlights ||= []).push(result);
+      } else if (path === '/api/highlight-delete' && data) {
+        for (const article of model.articles) article.highlights = (article.highlights || []).filter(item => item.id !== data.id);
+        result = {deleted: data.id};
+      } else if (path === '/api/position' && data) {
+        const article = model.articles.find(a => a.url === data.url);
+        if (article) article.position = {fraction: data.fraction, updated_at: new Date().toISOString()};
+        result = {};
       } else if (path === '/api/delete-article' && data) {
         if (!model.articles.some(article => article.url === data.url)) throw new Error('Article not found.');
         const removed = model.queue.urls.indexOf(data.url);

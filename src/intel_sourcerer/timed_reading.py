@@ -34,7 +34,7 @@ def timer_action(db, data, now=None):
         if type(target) is not int or not 30 <= target <= 14400:
             raise SessionError("Choose a target between 0.5 and 240 minutes.")
         article = db.execute(
-            "SELECT title,content_text,content_markdown,content_format FROM articles WHERE url=?",
+            "SELECT title,content_text,content_markdown,content_html,content_format FROM articles WHERE url=?",
             (data.get("url"),),
         ).fetchone()
         if not article:
@@ -48,7 +48,7 @@ def timer_action(db, data, now=None):
                 "Pause and end your current timer before starting another."
             )
         words = reading_word_count(
-            article["content_markdown"], article["content_text"] or ""
+            article["content_markdown"], article["content_text"] or "", article["content_html"]
         )
         if not words:
             raise SessionError("This article has no saved text to time.")

@@ -4,11 +4,34 @@ from html import escape
 import re
 import hashlib
 import pymupdf
-from .pdf_content import page_html, strip_page_furniture, normalize_section_heading, is_lettered_heading
-from .content import extract_markdown
+from .pdf_content import (
+    BULLET_GLYPHS,
+    BULLET_LINE,
+    CODE_LINE,
+    DASH_LINE,
+    INVISIBLE,
+    LINK_CLOSE,
+    LINK_OPEN,
+    LINK_SEP,
+    LONE_BULLETS,
+    clean_line,
+    is_lettered_heading,
+    normalize_section_heading,
+    page_html,
+    strip_page_furniture,
+)
+from .content import extract_article, extract_markdown
 
 
 def extract_layout(data, url, directory):
+    return extract_markdown(layout_html(data, url, directory), url)
+
+
+def extract_layout_article(data, url, directory):
+    return extract_article(layout_html(data, url, directory), url)
+
+
+def layout_html(data, url, directory):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(data).hexdigest()
@@ -16,8 +39,10 @@ def extract_layout(data, url, directory):
         raw = ['\n'.join(block[4] for block in page.get_text('blocks') if not is_margin_page_number(block, page.rect)) for page in document]
         cleaned = strip_page_furniture(raw)
         output = []
+        hrefs = []
         for index, page in enumerate(document):
             blocks = [block for block in page.get_text('blocks', sort=True) if not is_margin_page_number(block, page.rect)]
+            block_lines, marker_left = marked_block_lines(page, hrefs)
             allowed = set(line.strip() for line in cleaned[index].splitlines())
             regions = []
             entries = []
@@ -97,7 +122,7 @@ def extract_layout(data, url, directory):
                 figure(rect, f'Chart or diagram · PDF page {index + 1}')
             author_blocks = infer_author_blocks(blocks) if index == 0 else []
             if author_blocks:
-                author_html = '<h2>Authors &amp; publication details</h2>' + ''.join(page_html(b[4]) for b in author_blocks)
+                author_html = '<h2>Authors &amp; publication details</h2>' + ''.join(page_html('\n'.join(text for _, text in block_lines.get(b[5], ())).replace(CODE_LINE, '')) for b in author_blocks)
                 entries.append((min(b[1] for b in author_blocks), author_html, pymupdf.Rect(0, min(b[1] for b in author_blocks), page.rect.width, max(b[3] for b in author_blocks)), None))
             for block in blocks:
                 if block in author_blocks:
@@ -107,18 +132,167 @@ def extract_layout(data, url, directory):
                 rect = pymupdf.Rect(block[:4])
                 if any(r.contains(rect) or (rect & r).get_area() > rect.get_area() * .5 for r in regions):
                     continue
-                text = '\n'.join(line for line in block[4].splitlines() if line.strip() in allowed)
+                text = '\n'.join(marked for plain, marked in block_lines.get(block[5], ()) if plain in allowed)
+                if block[5] in marker_left:
+                    rect.x0 = min(rect.x0, marker_left[block[5]])
                 if text.strip():
                     entries.append((rect.y0, None, rect, text))
             output.extend(flow_text_blocks(entries, page.rect))
-        html = ''.join(output)
+        html = resolve_links(''.join(output), hrefs)
+        # A list interrupted only by a page break or a wide gap is still one list.
+        html = html.replace('</ul><ul>', '').replace('</code></pre><pre><code>', '\n')
         # Text blocks may split author and advisor lines; retain a single metadata heading.
         marker = '<h2>Authors &amp; publication details</h2>'
         if marker in html:
             first = html.index(marker) + len(marker)
             html = html[:first] + html[first:].replace(marker, '')
-        markdown, media = extract_markdown('<article>' + html + '</article>', url)
-        return markdown, media
+        return '<article>' + html + '</article>'
+
+
+def marked_block_lines(page, hrefs):
+    """Return each block's lines as (plain, reader text) and its list marker's x.
+
+    Reader text carries link markers from the page's annotations and any list
+    marker that was extracted separately from the line it sits beside. New link
+    targets are appended to hrefs, which is shared across the document.
+    """
+    links = []
+    for link in page.get_links():
+        uri = (link.get('uri') or '').strip()
+        if re.match(r'^(?:https?://|mailto:)', uri, re.I):
+            hrefs.append(uri)
+            links.append((pymupdf.Rect(link['from']) + (-1, -1, 1, 1), len(hrefs) - 1))
+    lines = []
+    for block in page.get_text('rawdict', flags=pymupdf.TEXTFLAGS_BLOCKS)['blocks']:
+        for line in block.get('lines', ()):
+            chars = [char for span in line['spans'] for char in span['chars']]
+            plain = ''.join(char['c'] for char in chars)
+            for plain_part, marked_part in zip(plain.splitlines(), mark_links(chars, links).splitlines()):
+                lines.append(dict(block=block['number'], bbox=pymupdf.Rect(line['bbox']), plain=plain_part.strip(), marked=marked_part.strip(), mono=is_monospace_line(line), text_left=first_glyph_left(chars), size=line['spans'][0]['size'] if line['spans'] else 0))
+    marker_left = {}
+    for marker in lines:
+        text = INVISIBLE.sub('', marker['plain'])
+        if not (LONE_BULLETS.fullmatch(text) or re.fullmatch(r'\d{1,3}[.)]', text)):
+            continue
+        beside = [
+            other for other in lines
+            if other is not marker and not other.get('has_marker') and other['plain']
+            and not LONE_BULLETS.fullmatch(INVISIBLE.sub('', other['plain']))
+            and not re.fullmatch(r'\d{1,3}[.)]', other['plain'])
+            and marker['bbox'].x1 - 1 <= other['bbox'].x0 <= marker['bbox'].x1 + 36
+            and abs((marker['bbox'].y0 + marker['bbox'].y1) - (other['bbox'].y0 + other['bbox'].y1)) / 2 < other['bbox'].height * .6
+        ]
+        if not beside:
+            continue
+        target = min(beside, key=lambda other: other['bbox'].x0)
+        target['has_marker'] = True
+        target['marked'] = text + ' ' + target['marked']
+        target['marker_x'] = marker['bbox'].x0
+        marker['absorbed'] = True
+        marker_left[target['block']] = min(marker_left.get(target['block'], marker['bbox'].x0), marker['bbox'].x0)
+    code_left = {}
+    for line in lines:
+        if line['mono'] and line['text_left'] is not None:
+            code_left[line['block']] = min(code_left.get(line['block'], line['text_left']), line['text_left'])
+    result = {}
+    list_left = {}
+    for line in lines:
+        if line.get('absorbed'):
+            continue
+        block = line['block']
+        if line['mono'] and line['plain'] and not EMAIL_LINE.fullmatch(line['plain']):
+            # Monospace advances evenly, so an offset from the block's edge is indentation.
+            indent = round((line['text_left'] - code_left[block]) / (line['size'] * .6)) if line['size'] else 0
+            result.setdefault(block, []).append((line['plain'], CODE_LINE + ' ' * max(indent, 0) + line['marked']))
+            continue
+        if has_list_marker(line['marked']):
+            list_left[block] = line.get('marker_x', line['bbox'].x0)
+        elif block in list_left and line['bbox'].x0 <= list_left[block] + 2:
+            # Back at the bullet's margin, so this is body text after the list.
+            del list_left[block]
+            line['marked'] = '\n' + line['marked']
+        result.setdefault(block, []).append((line['plain'], line['marked']))
+    return result, marker_left
+
+
+EMAIL_LINE = re.compile(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}')
+MONOSPACE_FONT = re.compile(r'mono|courier|consol|menlo|inconsolata|sourcecode|cmtt|sftt', re.I)
+
+
+def is_monospace_line(line):
+    # A bullet glyph usually comes from a symbol font even in a monospace block.
+    spans = [span for span in line['spans'] if ''.join(char['c'] for char in span['chars']).strip() not in {''} | set(BULLET_GLYPHS)]
+    return bool(spans) and all(span['flags'] & 8 or MONOSPACE_FONT.search(span['font']) for span in spans)
+
+
+def first_glyph_left(chars):
+    return next((char['bbox'][0] for char in chars if not char['c'].isspace()), None)
+
+
+def mark_links(chars, links):
+    """Wrap the characters inside each link annotation in private-use markers."""
+    output = []
+    current = None
+    spaces = ''
+    for char in chars:
+        value = char['c']
+        if value.isspace():
+            spaces += value
+            continue
+        x0, y0, x1, y1 = char['bbox']
+        point = pymupdf.Point((x0 + x1) / 2, (y0 + y1) / 2)
+        link = next((number for rect, number in links if rect.contains(point)), None)
+        # A bullet inside a link's box belongs to the list, not to the link.
+        if current is None and BULLET_LINE.match(value + ' x') and not ''.join(output).strip():
+            link = None
+        if link != current:
+            if current is not None:
+                output.append(LINK_CLOSE)
+            output.append(spaces)
+            spaces = ''
+            if link is not None:
+                output.append(f'{LINK_OPEN}{link}{LINK_SEP}')
+            current = link
+        output.append(spaces)
+        spaces = ''
+        output.append(value)
+    if current is not None:
+        output.append(LINK_CLOSE)
+    output.append(spaces)
+    return ''.join(output)
+
+
+def resolve_links(html, hrefs):
+    """Replace link markers with anchors, joining pieces split across lines."""
+    def anchor(match):
+        href = hrefs[int(match[1])]
+        text = match[2]
+        trailing = re.search(r'[.,;:]+$', text)
+        punctuation = trailing[0] if trailing else ''
+        text = text[:len(text) - len(punctuation)]
+        return f'<a href="{escape(href, quote=True)}">{text}</a>{punctuation}'
+
+    pattern = re.compile(f'{LINK_OPEN}(\\d+){LINK_SEP}(.*?){LINK_CLOSE}', re.S)
+    # Wrapped pieces sit next to each other, separated by at most whitespace.
+    joined = re.compile(f'{LINK_OPEN}(\\d+){LINK_SEP}([^{LINK_CLOSE}]*){LINK_CLOSE}(\\s*){LINK_OPEN}(\\d+){LINK_SEP}')
+    merged = None
+    while merged != html:
+        merged = html
+        html = joined.sub(lambda m: f'{LINK_OPEN}{m[1]}{LINK_SEP}{m[2]}{m[3]}' if hrefs[int(m[1])] == hrefs[int(m[4])] else m[0], html)
+    html = pattern.sub(lambda m: anchor_for_wrapped_url(anchor(m)), html)
+    return html.replace(LINK_OPEN, '').replace(LINK_SEP, '').replace(LINK_CLOSE, '')
+
+
+def anchor_for_wrapped_url(anchor_html):
+    """A printed URL split by a line break should not keep the break's space."""
+    match = re.fullmatch(r'<a href="([^"]*)">(.*?)</a>(.*)', anchor_html, re.S)
+    if not match or not re.search(r'\s', match[2]):
+        return anchor_html
+    squeezed = re.sub(r'\s+', '', match[2])
+    bare = re.sub(r'^https?://', '', squeezed, flags=re.I).lower()
+    if re.search(r'[./]', bare) and bare in match[1].lower():
+        return f'<a href="{match[1]}">{squeezed}</a>{match[3]}'
+    return anchor_html
 
 
 def flow_text_blocks(entries, page_rect=None):
@@ -126,13 +300,15 @@ def flow_text_blocks(entries, page_rect=None):
     output = []
     pending = []
     previous = None
+    bullet_left = None
 
     def flush():
-        nonlocal previous
+        nonlocal previous, bullet_left
         if pending:
             output.append(page_html("\n".join(pending)))
             pending.clear()
         previous = None
+        bullet_left = None
 
     def boundary(text):
         first = text.strip().splitlines()[0]
@@ -147,8 +323,12 @@ def flow_text_blocks(entries, page_rect=None):
         text = normalize_section_heading(text)
         if previous is not None:
             gap = rect.y0 - previous.y1
+            # Inside a list, a line indented past the bullet still belongs to it,
+            # and a line back at the bullet's margin or further left ends it.
+            in_item = bullet_left is not None and rect.x0 > bullet_left + 2
+            ends_list = bullet_left is not None and rect.x0 <= bullet_left + 2 and not has_list_marker(text)
             # A larger vertical gap or indentation denotes a new paragraph.
-            if boundary(text) or gap < -2 or gap > max(12, min(previous.height, rect.height) * .85) or rect.x0 > previous.x0 + 12:
+            if boundary(text) or gap < -2 or gap > max(12, min(previous.height, rect.height) * .85) or (rect.x0 > previous.x0 + 12 and not in_item) or ends_list:
                 flush()
         if boundary(text):
             flush()
@@ -156,8 +336,15 @@ def flow_text_blocks(entries, page_rect=None):
         else:
             pending.append(text.strip())
             previous = rect
+            if has_list_marker(text):
+                bullet_left = rect.x0
     flush()
     return output
+
+
+def has_list_marker(text):
+    lines = (clean_line(raw) for raw in text.splitlines())
+    return any(BULLET_LINE.match(line) or DASH_LINE.match(line) or LONE_BULLETS.fullmatch(line) or re.match(r'^\d+[.)]\s', line) for line in lines)
 
 
 def is_simple_table(cells, columns):

@@ -1,5 +1,5 @@
 from bs4 import BeautifulSoup
-from intel_sourcerer.web import render_page
+from intel_sourcerer.web import frame_ancestors, render_page
 
 
 def test_complete_text_and_original_link_are_safely_rendered():
@@ -73,9 +73,43 @@ def test_read_toggle_persists_both_states_and_rejects_invalid_requests(tmp_path)
             media=BeautifulSoup(response.json()['body_html'],'html.parser').select_one('[data-media-kind="image"]')
             assert media['data-media-url']=='https://example.com/chart.png'
             assert media['data-media-description']=='Chart'
+            assert response.json()['format_label']=='HTML'
+            assert client.get('/api/state').json()['articles'][0]['format_label']=='HTML'
+            assert media.name=='figure' and media.figcaption.get_text()=='Chart'
             assert "img-src 'self' https: http:" in response.headers['Content-Security-Policy']
             assert media.find('a')['href']=='https://example.com/chart.png'
+            saved=client.post('/api/highlights',json={'url':article.url,'quote':'Chart','prefix':'','suffix':''},headers=headers).json()
+            assert client.post('/api/position',json={'url':article.url,'fraction':0.4},headers=headers).status_code==200
+            assert client.post('/api/triage',json={'urls':[article.url],'decision':'keep'},headers=headers).status_code==200
+            assert client.post('/api/triage',json={'urls':[article.url],'decision':'keep'}).status_code==403
+            reopened=client.get('/api/article',params={'url':article.url}).json()
+            assert [h['id'] for h in reopened['highlights']]==[saved['id']] and reopened['position']['fraction']==0.4
+            state=client.get('/api/state').json()
+            assert state['articles'][0]['triage']=='keep' and set(state['week'])=={'saved','read'}
+            db.execute("UPDATE articles SET content_markdown=content_markdown||'\n\nDropper loader.exe has MD5 2915b3f8b703eb744fc54c81f4a9c67f' WHERE url=?",(article.url,));db.commit()
+            found=client.get('/api/article',params={'url':article.url}).json()['iocs']
+            assert found=={'cves':[],'techniques':[],'hashes':[{'value':'2915b3f8b703eb744fc54c81f4a9c67f','type':'MD5'}],'files':[{'value':'loader.exe','common':False}]}
+            exported=client.get('/export',params={'url':article.url}).text
+            assert '## Indicators' in exported and '`loader.exe`' in exported
+            assert '## Highlights' in exported and '> Chart' in exported
+            assert 'Chart' in client.get('/library',params={'selected':article.url}).text
+            assert client.post('/api/highlight-delete',json={'id':saved['id']},headers=headers).status_code==200
+            for path,kind in [('/manifest.webmanifest','manifest'),('/sw.js','javascript'),('/app.js','javascript'),('/save.js','javascript'),('/icon-192.png','image/png')]:
+                static=client.get(path)
+                assert static.status_code==200 and kind in static.headers['Content-Type']
+            csp=client.get('/').headers['Content-Security-Policy']
+            assert "worker-src 'self'" in csp and "manifest-src 'self'" in csp
+            page=client.get('/save',params={'url':'https://example.com/shared'})
+            assert page.status_code==200 and 'save-confirm' in page.text and 'href="/manifest.webmanifest"' in page.text
+            assert client.get('/api/state').json()['articles'][0]['url']==article.url and len(client.get('/api/state').json()['articles'])==1
 
 
     finally:
         server.shutdown();server.server_close();thread.join();db.close()
+
+
+def test_framing_is_blocked_unless_configured(monkeypatch):
+    monkeypatch.delenv("INTEL_SOURCERER_FRAME_ANCESTORS", raising=False)
+    assert frame_ancestors() == "'none'"
+    monkeypatch.setenv("INTEL_SOURCERER_FRAME_ANCESTORS", "http://127.0.0.1:4141")
+    assert frame_ancestors() == "http://127.0.0.1:4141"

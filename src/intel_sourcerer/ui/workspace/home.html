@@ -14,8 +14,8 @@
       <div class="home-content">
         <div class="home-columns">
           <section class="home-session">
-            <h1>Pick up where you left off</h1>
             <p class="eyebrow">CURRENT READING SESSION</p>
+            <h1>Pick up where you left off</h1>
             <div id="home-current"></div>
             <p id="home-progress-text" class="muted"></p>
             <progress
@@ -32,9 +32,30 @@
               Build a focused reading queue from the latest cybersecurity
               research and intelligence.
             </p>
-            <button id="home-build">Build a new queue</button>
+            <div class="home-actions">
+              <button id="home-find" type="button">Find new articles</button
+              ><button id="home-build">Build a new queue</button>
+            </div>
+            <p id="home-find-status" class="muted" role="status" hidden></p>
+            <p id="home-library-count" class="muted"></p>
+            <p id="home-week" class="muted" hidden></p>
+            <p><a href="/save">Set up one-click saving</a></p>
           </aside>
         </div>
+        <section id="home-kept" class="home-kept" hidden>
+          <h2>Kept to read <span id="kept-count" class="muted"></span></h2>
+          <p id="kept-titles" class="muted"></p>
+          <button id="kept-start" class="primary" type="button">Start a session with these</button>
+          <p id="kept-warning" class="muted" hidden>This replaces your current queue.</p>
+        </section>
+        <section id="home-triage" class="home-triage" hidden>
+          <div class="home-triage-heading">
+            <h2>To triage <span id="triage-count" class="muted"></span></h2>
+            <button id="triage-undo" type="button" hidden>Undo</button>
+          </div>
+          <div id="triage-list"></div>
+          <button id="triage-old" type="button" hidden></button>
+        </section>
         <section class="home-notes">
           <h2>Recent notes</h2>
           <div id="recent-notes"></div>

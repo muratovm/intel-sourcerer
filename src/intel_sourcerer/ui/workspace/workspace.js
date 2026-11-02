@@ -7,7 +7,9 @@ let state,
   noteModel,
   timer,
   saving = Promise.resolve(),
-  busy = false;
+  busy = false,
+  selectedPassage = "",
+  selectedPassageHTML = "";
 const token = document.querySelector('meta[name="csrf-token"]').content;
 function notice(message) {
   $("notice").textContent = message;
@@ -45,15 +47,54 @@ function show(view) {
   for (const id of ["home", "setup", "reader", "complete"])
     $(id).hidden = id !== view;
 }
-function queueKey() {
-  return `${userStoragePrefix}intel-scroll:${standaloneURL ? "standalone" : state.queue.id}:${currentArticle.url}`;
+function positionKey(url) {
+  return `${userStoragePrefix}intel-position:${url}`;
+}
+function articleFraction() {
+  const pane = $("article-pane"),
+    room = pane.scrollHeight - pane.clientHeight;
+  return room > 0 ? Math.min(1, Math.max(0, pane.scrollTop / room)) : 0;
+}
+function restoreFraction(fraction) {
+  const pane = $("article-pane");
+  pane.scrollTop = fraction * (pane.scrollHeight - pane.clientHeight);
+}
+let positionTimer,
+  sentFraction = null;
+function sendPosition(keepalive = false) {
+  clearTimeout(positionTimer);
+  if (!currentArticle || $("article-pane").offsetParent === null) return;
+  const fraction = articleFraction();
+  if (sentFraction !== null && Math.abs(fraction - sentFraction) < 0.005) return;
+  sentFraction = fraction;
+  // Losing one position update is harmless, and the local copy still has it.
+  fetch("/api/position", {
+    method: "POST",
+    keepalive,
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": token },
+    body: JSON.stringify({ url: currentArticle.url, fraction }),
+  }).catch(() => {});
 }
 function stashScroll() {
-  if (currentArticle && (standaloneURL || state?.queue)) {
-    try {
-      localStorage.setItem(queueKey(), String($("article-pane").scrollTop));
-    } catch {}
-  }
+  if (!currentArticle || $("article-pane").offsetParent === null) return;
+  try {
+    localStorage.setItem(
+      positionKey(currentArticle.url),
+      JSON.stringify({ fraction: articleFraction(), updated_at: new Date().toISOString() }),
+    );
+  } catch {}
+  clearTimeout(positionTimer);
+  positionTimer = setTimeout(sendPosition, 1500);
+}
+// The newest position wins, whether it came from this device or another one.
+function savedFraction(article) {
+  let local = null;
+  try {
+    local = JSON.parse(localStorage.getItem(positionKey(article.url)));
+  } catch {}
+  const server = article.position;
+  if (local && (!server || local.updated_at > server.updated_at)) return local.fraction;
+  return server?.fraction || 0;
 }
 function draftKey(url) {
   return `${userStoragePrefix}intel-draft:${url}`;
@@ -78,7 +119,7 @@ function setBusy(value) {
   document
     .querySelectorAll("[data-format]")
     .forEach((b) => (b.disabled = value));
-  $("quote-selection").disabled = value;
+  $("quote-selection").disabled = value || !selectedPassage;
   document
     .querySelectorAll("[data-action]")
     .forEach(
@@ -124,6 +165,8 @@ function renderHome() {
     heading.textContent = item.title;
     meta.className = "muted";
     meta.textContent = `${item.publisher} · ${dateLabel(item.published_at)}`;
+    const chip = formatChip(state.articles.find((article) => article.url === item.url));
+    if (chip) meta.prepend(chip);
     $("home-current").append(heading, meta);
   } else {
     const heading = document.createElement("h2");
@@ -139,7 +182,9 @@ function renderHome() {
   $("home-progress").max = q?.items.length || 1;
   $("home-progress").value = q?.read_count || 0;
   $("resume-reading").hidden = !active;
+  renderTriage();
   $("recent-notes").replaceChildren();
+  $("home-library-count").textContent = `${state.articles.length} saved articles`;
   const noted = state.articles
     .filter((a) => a.has_notes)
     .sort((a, b) =>
@@ -165,6 +210,8 @@ function renderHome() {
     publisher.textContent = article.publisher;
     date.textContent = dateLabel(article.published_at);
     date.className = "muted";
+    const chip = formatChip(article);
+    if (chip) date.prepend(chip);
     source.append(publisher, date);
     link.className = "note-article-link";
     link.textContent = article.title;
@@ -185,7 +232,134 @@ function renderHome() {
     $("recent-notes").append(row);
   }
 }
+let triageUndo = null;
+function openStandalone(url) {
+  standaloneURL = url;
+  return renderQueue().catch((error) => notice(error.message));
+}
+async function decideTriage(urls, decision, undoable = true) {
+  try {
+    await api("/api/triage", { urls, decision });
+  } catch (error) {
+    notice(error.message);
+    return;
+  }
+  for (const article of state.articles)
+    if (urls.includes(article.url)) article.triage = decision;
+  triageUndo = undoable && decision ? urls : null;
+  renderTriage();
+}
+function renderTriage() {
+  // Temporary sessions only hold what was just supplied, so there's nothing to sort.
+  const temporary = document.body.classList.contains("temporary-session"),
+    queued = new Set(
+      state.queue && !state.queue.finished ? state.queue.items.map((item) => item.url) : [],
+    ),
+    pending = temporary
+      ? []
+      : state.articles.filter(
+          (a) => !a.is_read && !a.triage && !a.has_notes && !queued.has(a.url),
+        ),
+    kept = temporary
+      ? []
+      : state.articles.filter((a) => a.triage === "keep" && !a.is_read && !queued.has(a.url));
+  if (state.week) {
+    $("home-week").hidden = false;
+    $("home-week").textContent = `Last 7 days: ${state.week.saved} saved · ${state.week.read} read`;
+  }
+  $("home-kept").hidden = !kept.length;
+  $("kept-count").textContent = `· ${kept.length}`;
+  $("kept-titles").textContent =
+    kept.slice(0, 3).map((a) => a.title).join(" · ") +
+    (kept.length > 3 ? ` · and ${kept.length - 3} more` : "");
+  $("kept-warning").hidden = !queued.size;
+  $("kept-start").onclick = async () => {
+    $("kept-start").disabled = true;
+    try {
+      standaloneURL = null;
+      state.queue = await api("/api/queue", { urls: kept.slice(0, 20).map((a) => a.url) });
+      await renderQueue();
+    } catch (error) {
+      notice(error.message);
+    } finally {
+      $("kept-start").disabled = false;
+    }
+  };
+  $("home-triage").hidden = !pending.length && !triageUndo;
+  $("triage-count").textContent = `· ${pending.length}`;
+  $("triage-undo").hidden = !triageUndo;
+  $("triage-undo").onclick = () => decideTriage(triageUndo, null, false);
+  const cutoff = Date.now() - 30 * 86400000,
+    old = pending.filter((a) => new Date(a.published_at).getTime() < cutoff);
+  $("triage-old").hidden = !old.length;
+  $("triage-old").textContent = `Skip ${old.length} older than 30 days`;
+  $("triage-old").onclick = () => decideTriage(old.map((a) => a.url), "skip");
+  $("triage-list").replaceChildren(
+    ...pending.slice(0, 5).map((article) => {
+      const row = document.createElement("article"),
+        copy = document.createElement("div"),
+        title = document.createElement("button"),
+        meta = document.createElement("p"),
+        actions = document.createElement("div"),
+        keep = document.createElement("button"),
+        skip = document.createElement("button");
+      row.className = "triage-row";
+      title.className = "note-article-link";
+      title.textContent = article.title;
+      title.onclick = () => openStandalone(article.url);
+      meta.className = "muted";
+      meta.textContent = `${article.publisher} · ${dateLabel(article.published_at)}`;
+      const chip = formatChip(article);
+      if (chip) meta.prepend(chip);
+      copy.append(title, meta);
+      keep.textContent = "Keep";
+      keep.setAttribute("aria-label", "Keep: " + article.title);
+      keep.onclick = () => decideTriage([article.url], "keep");
+      skip.textContent = "Skip";
+      skip.setAttribute("aria-label", "Skip: " + article.title);
+      skip.onclick = () => decideTriage([article.url], "skip");
+      actions.append(keep, skip);
+      row.append(copy, actions);
+      return row;
+    }),
+  );
+}
 $("home-build").onclick = () => renderSetup();
+// Temporary sessions only hold what was supplied, so there are no sources to check.
+$("home-find").hidden = document.body.classList.contains("temporary-session");
+// A new tab, so leaving to look at sources doesn't lose the result of the check.
+function sourcesLink(text) {
+  const link = document.createElement("a");
+  link.href = "/sources";
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = text;
+  return link;
+}
+$("home-find").onclick = async () => {
+  const button = $("home-find"),
+    status = $("home-find-status");
+  button.disabled = true;
+  status.hidden = false;
+  status.replaceChildren("Checking your ", sourcesLink("sources"), " for the last 30 days. This can take a minute.");
+  notice("");
+  try {
+    const report = await api("/api/discover", { days: 30 }),
+      added = report.sources.reduce((total, source) => total + source.inserted, 0);
+    state = await api("/api/state");
+    if (!$("home").hidden) renderHome();
+    status.replaceChildren(
+      added ? `${added} new ${added === 1 ? "article" : "articles"} added to To triage.` : "No new articles.",
+    );
+    if (report.errors.length) status.append(" Some ", sourcesLink("sources"), " had problems.");
+    if (report.errors.length) notice(report.errors.join(" · "));
+  } catch (error) {
+    status.textContent = "Couldn't check for new articles. Your saved articles are still here.";
+    notice(error.message);
+  } finally {
+    button.disabled = false;
+  }
+};
 $("resume-reading").onclick = () => {
   standaloneURL = null;
   renderQueue().catch((error) => notice(error.message));
@@ -193,13 +367,21 @@ $("resume-reading").onclick = () => {
 function buildMeta(article) {
   return readerMetadata(article);
 }
+function formatChip(article) {
+  if (!article?.format_label) return null;
+  const chip = document.createElement("span");
+  chip.className = `format-chip format-${article.format_label.toLowerCase()}`;
+  chip.textContent = article.format_label;
+  return chip;
+}
 function styleArticleStatus(meta, article) {
   const publisher = document.createElement("span");
   publisher.className = "article-source";
   publisher.textContent = article.publisher;
   meta.replaceChildren(
+    ...[formatChip(article)].filter(Boolean),
     publisher,
-    document.createTextNode(` · ${article.content_format || "article"} · ${dateLabel(article.published_at)} · `),
+    document.createTextNode(` · ${dateLabel(article.published_at)} · `),
   );
   const status = document.createElement("span");
   status.textContent = article.is_read ? "Read" : "Unread";
@@ -209,7 +391,7 @@ function styleArticleStatus(meta, article) {
     meta.append(document.createTextNode(" · "));
     const noted = document.createElement("span");
     noted.className = "status-noted";
-    noted.textContent = "Notted";
+    noted.textContent = "Noted";
     meta.append(noted);
   }
 }
@@ -220,6 +402,20 @@ function addToDraft(url) {
     return;
   }
   draftQueue.push(url);
+  saveQueueDraft();
+  renderBuilder();
+}
+// Puts an article before another one, or at the end, whether or not it's queued yet.
+function placeDraft(url, beforeURL = null) {
+  if (url === beforeURL) return;
+  const queued = draftQueue.includes(url);
+  if (!queued && draftQueue.length >= 100) {
+    notice("Choose up to 100 articles per queue.");
+    return;
+  }
+  if (queued) draftQueue.splice(draftQueue.indexOf(url), 1);
+  const index = beforeURL ? draftQueue.indexOf(beforeURL) : -1;
+  draftQueue.splice(index < 0 ? draftQueue.length : index, 0, url);
   saveQueueDraft();
   renderBuilder();
 }
@@ -251,6 +447,7 @@ function renderBuilder() {
         (a.article_types || ["Threat research"]).includes(type)) &&
       new Date(a.published_at).getTime() >= since &&
       (!hideRead || !a.is_read) &&
+      a.triage !== "skip" &&
       (!onlyNoted || a.has_notes),
   );
   $("result-count").textContent = `${articles.length} results · newest first`;
@@ -300,7 +497,12 @@ function renderBuilder() {
     row.append(copy, tag, actions);
     row.draggable = true;
     row.addEventListener("dragstart", (e) => {
+      draggingURL = article.url;
       e.dataTransfer.setData("text/uri-list", article.url);
+    });
+    row.addEventListener("dragend", () => {
+      draggingURL = null;
+      clearQueueDrop();
     });
     $("discovery-results").append(row);
   }
@@ -317,6 +519,7 @@ function renderBuilder() {
     if (!article) return;
     const row = document.createElement("li");
     row.draggable = true;
+    row.dataset.url = url;
     const number = document.createElement("span");
     number.className = "queue-number";
     number.textContent = String(index + 1);
@@ -355,28 +558,16 @@ function renderBuilder() {
       draggingURL = url;
       e.dataTransfer.setData("text/uri-list", url);
     });
-    row.addEventListener("dragend", () => (draggingURL = null));
-    row.addEventListener("dragover", (e) => e.preventDefault());
-    row.addEventListener("drop", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (draggingURL) {
-        moveDraft(draggingURL, index);
-      } else if (e.dataTransfer.files.length) {
-        importFiles(Array.from(e.dataTransfer.files));
-      } else {
-        importLinks(
-          e.dataTransfer.getData("text/uri-list") ||
-            e.dataTransfer.getData("text/plain"),
-        );
-      }
+    row.addEventListener("dragend", () => {
+      draggingURL = null;
+      clearQueueDrop();
     });
     $("draft-queue").append(row);
   });
   if (!draftQueue.length) {
     const empty = document.createElement("p");
     empty.className = "muted";
-    empty.textContent = "Your next reading session starts here.";
+    empty.textContent = "Drag saved articles here to start your next session.";
     $("draft-queue").append(empty);
   }
   $("start").disabled = !draftQueue.length;
@@ -444,16 +635,39 @@ $("link-form").onsubmit = (event) => {
   event.preventDefault();
   importLinks($("article-url").value);
 };
-$("link-drop").addEventListener("dragover", (event) => {
+// The whole pane takes drops. Over a row, the pointer picks which side of it; elsewhere means the end.
+const queuePane = document.querySelector(".queue-pane");
+function clearQueueDrop() {
+  queuePane.classList.remove("drag-over");
+  for (const row of $("draft-queue").querySelectorAll(".drop-before, .drop-after"))
+    row.classList.remove("drop-before", "drop-after");
+}
+function queueDropPoint(event) {
+  const row = event.target.closest?.("#draft-queue li"),
+    rows = $("draft-queue").querySelectorAll("li");
+  if (!row) return { row: rows[rows.length - 1] || null, after: true, before: null };
+  const box = row.getBoundingClientRect(),
+    after = event.clientY > box.top + box.height / 2;
+  return { row, after, before: after ? row.nextElementSibling?.dataset.url || null : row.dataset.url };
+}
+queuePane.addEventListener("dragover", (event) => {
   event.preventDefault();
-  $("link-drop").classList.add("drag-over");
+  clearQueueDrop();
+  queuePane.classList.add("drag-over");
+  const point = queueDropPoint(event);
+  point.row?.classList.add(point.after ? "drop-after" : "drop-before");
 });
-$("link-drop").addEventListener("dragleave", () =>
-  $("link-drop").classList.remove("drag-over"),
-);
-$("link-drop").addEventListener("drop", (event) => {
+queuePane.addEventListener("dragleave", (event) => {
+  if (!queuePane.contains(event.relatedTarget)) clearQueueDrop();
+});
+queuePane.addEventListener("drop", (event) => {
   event.preventDefault();
-  $("link-drop").classList.remove("drag-over");
+  const { before } = queueDropPoint(event);
+  clearQueueDrop();
+  if (draggingURL) {
+    placeDraft(draggingURL, before);
+    return;
+  }
   if (event.dataTransfer.files.length) {
     importFiles(Array.from(event.dataTransfer.files));
     return;
@@ -495,7 +709,7 @@ function readingTimeLabel(article) {
 }
 
 function readerMetadata(article) {
-  return `${article.publisher} · ${dateLabel(article.published_at)} · ${readingTimeLabel(article)} · ${article.is_read ? "Read" : "Unread"}${article.has_notes ? " · Notted" : ""}`;
+  return `${article.publisher} · ${dateLabel(article.published_at)} · ${readingTimeLabel(article)} · ${article.is_read ? "Read" : "Unread"}${article.has_notes ? " · Noted" : ""}`;
 }
 
 async function renderQueue() {
@@ -527,8 +741,9 @@ async function renderQueue() {
     "/api/article?" + new URLSearchParams({ url: item.url }),
   );
   currentArticle = article;
-  selectedPassage = "";
-  selectedPassageHTML = "";
+  sentFraction = null;
+  armPassage();
+  setPhoneView("read");
   noteModel = {
     url: article.url,
     revision: article.notes_revision,
@@ -558,12 +773,17 @@ async function renderQueue() {
     text === article.notes ? "Saved" : "Unsaved draft";
   $("article-title").textContent = article.title;
   $("article-meta").textContent = readerMetadata(article);
+  $("article-format").replaceChildren(...[formatChip(article)].filter(Boolean));
   const source = new URL(article.url);
   $("original").hidden = !["https:", "http:"].includes(source.protocol);
   $("original").href = article.url;
+  $("article-body").dataset.bodyFormat = article.body_format || "markdown";
   $("article-body").innerHTML = article.body_html;
+  applyTextScale();
   renderMedia();
   window.renderArticleMath?.();
+  renderHighlights();
+  renderIOCs();
   const next = q.items[q.cursor + 1];
   document
     .querySelectorAll(".position")
@@ -596,11 +816,8 @@ async function renderQueue() {
     )
     .forEach((el) => (el.hidden = !!standaloneURL));
   $("mark-unread").hidden = !!standaloneURL || !article.is_read;
-  let scroll = 0;
-  try {
-    scroll = Number(localStorage.getItem(queueKey())) || 0;
-  } catch {}
-  $("article-pane").scrollTop = scroll;
+  restoreFraction(savedFraction(article));
+  sentFraction = articleFraction();
   if (text !== article.notes && noteModel.revision === article.notes_revision)
     timer = setTimeout(() => saveNow().catch((e) => notice(e.message)), 600);
 }
@@ -660,6 +877,11 @@ $("notes").addEventListener("input", () => {
   );
 });
 $("article-pane").addEventListener("scroll", stashScroll, { passive: true });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) sendPosition(true);
+});
+// Notes written offline are already stashed; send them when the connection returns.
+window.addEventListener("online", () => saveNow().catch(() => {}));
 window.addEventListener("beforeunload", (event) => {
   stashDraft();
   if (noteModel && notesText() !== noteModel.savedText) {
@@ -694,8 +916,7 @@ document.querySelectorAll("[data-action]").forEach(
           }
           currentArticle = null;
           noteModel = null;
-          selectedPassage = "";
-          selectedPassageHTML = "";
+          armPassage();
           renderSetup();
           setBusy(false);
           return;
@@ -712,8 +933,50 @@ document.querySelectorAll("[data-action]").forEach(
       }
     }),
 );
-let selectedPassage = "",
-  selectedPassageHTML = "";
+let selectedAnchor = null,
+  activeHighlight = null,
+  holdPassage = false;
+function updateSelectionBar() {
+  $("selection-actions").hidden = !selectedPassage && !activeHighlight;
+  $("quote-selection").hidden = !selectedPassage;
+  $("highlight-selection").hidden = !selectedAnchor;
+  $("remove-highlight").hidden = !activeHighlight;
+}
+// Offsets into the article's text, with context to tell repeated phrases apart.
+function passageAnchor(range) {
+  const body = $("article-body");
+  if (!body.contains(range.startContainer) || !body.contains(range.endContainer)) return null;
+  const before = document.createRange();
+  before.selectNodeContents(body);
+  before.setEnd(range.startContainer, range.startOffset);
+  const raw = range.toString(),
+    quote = raw.trim(),
+    start = before.toString().length + (raw.length - raw.trimStart().length),
+    all = body.textContent;
+  if (!quote || quote.length > 20000) return null;
+  return {
+    quote,
+    prefix: all.slice(Math.max(0, start - 60), start),
+    suffix: all.slice(start + quote.length, start + quote.length + 60),
+  };
+}
+function armPassage(text = "", html = "", words = 0, anchor = null) {
+  selectedPassage = text;
+  selectedPassageHTML = html;
+  selectedAnchor = anchor;
+  if (text) activeHighlight = null;
+  updateSelectionBar();
+  const button = $("quote-selection");
+  button.disabled = busy || !text;
+  button.textContent = text
+    ? `Add ${words} selected ${words === 1 ? "word" : "words"} to notes`
+    : "Add selected passage to notes";
+}
+function noteCode(tex) {
+  const code = document.createElement("code");
+  code.textContent = tex;
+  return code;
+}
 document.addEventListener("selectionchange", () => {
   const selection = window.getSelection();
   const isArticleText = (node) =>
@@ -726,11 +989,30 @@ document.addEventListener("selectionchange", () => {
   )
     return;
   const text = selection.toString().trim();
-  if (!text) return;
-  selectedPassage = text;
+  if (holdPassage) return;
+  // Clicking into the notes keeps the passage, so it can go where the caret is.
+  if (!text) {
+    armPassage();
+    return;
+  }
   const range = selection.getRangeAt(0),
     holder = document.createElement("div");
   holder.append(range.cloneContents());
+  const common =
+    range.commonAncestorContainer.nodeType === 1
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentElement;
+  // A selection inside one element clones without that element around it.
+  const math = common.closest(".article-math"),
+    code = common.closest("pre, code");
+  if (math) holder.replaceChildren(noteCode(math.dataset.tex));
+  else if (code?.closest("pre")) {
+    const pre = document.createElement("pre");
+    pre.append(noteCode(holder.textContent));
+    holder.replaceChildren(pre);
+  } else if (code) holder.replaceChildren(noteCode(holder.textContent));
+  for (const element of holder.querySelectorAll(".article-math"))
+    element.replaceWith(noteCode(element.dataset.tex));
   for (const heading of holder.querySelectorAll("h1,h2,h3,h4,h5,h6")) {
     const bold = document.createElement("strong");
     bold.append(...heading.childNodes);
@@ -747,21 +1029,297 @@ document.addEventListener("selectionchange", () => {
       ? range.endContainer
       : range.endContainer.parentElement;
   const heading = start.closest("h1,h2,h3,h4,h5,h6");
-  selectedPassageHTML =
+  armPassage(
+    text,
     heading && heading === end.closest("h1,h2,h3,h4,h5,h6")
       ? "<strong>" + plainHTML(text) + "</strong>"
-      : sanitizeNotes(holder.innerHTML);
+      : sanitizeNotes(holder.innerHTML),
+    holder.textContent.trim().split(/\s+/).length,
+    passageAnchor(range),
+  );
 });
+// Pressing a button must not clear the selection and hide it mid-click.
+$("selection-actions").addEventListener("mousedown", (e) => e.preventDefault());
+$("selection-actions").addEventListener("pointerdown", () => (holdPassage = true));
+document.addEventListener("pointerup", () => setTimeout(() => (holdPassage = false), 400));
 $("quote-selection").onclick = () => {
-  if (!selectedPassage) {
-    notice("Select a passage in the article first.");
-    return;
-  }
+  holdPassage = false;
+  if (!selectedPassage) return;
   notice("");
   insertCallout(selectedPassage, selectedPassageHTML);
-  selectedPassage = "";
-  selectedPassageHTML = "";
+  armPassage();
+  window.getSelection().removeAllRanges();
 };
+$("highlight-selection").onclick = async () => {
+  holdPassage = false;
+  if (!selectedAnchor || !currentArticle) return;
+  const article = currentArticle,
+    anchor = selectedAnchor;
+  armPassage();
+  window.getSelection().removeAllRanges();
+  try {
+    const highlight = await api("/api/highlights", { url: article.url, ...anchor });
+    (article.highlights ||= []).push(highlight);
+    if (currentArticle === article) renderHighlights();
+  } catch (error) {
+    notice(error.message);
+  }
+};
+function clearHighlightMarks() {
+  const body = $("article-body");
+  for (const mark of body.querySelectorAll("mark.article-highlight"))
+    mark.replaceWith(...mark.childNodes);
+  for (const math of body.querySelectorAll(".article-highlight-math"))
+    math.classList.remove("article-highlight-math");
+  body.normalize();
+}
+// A repeated phrase resolves to the occurrence whose surrounding text matches best.
+function locateHighlight(all, highlight) {
+  let best = -1,
+    bestScore = -1,
+    index = -1;
+  while ((index = all.indexOf(highlight.quote, index + 1)) !== -1) {
+    let score = 0;
+    const before = highlight.prefix || "",
+      after = highlight.suffix || "";
+    while (score < before.length && all[index - 1 - score] === before[before.length - 1 - score]) score++;
+    let tail = 0;
+    while (tail < after.length && all[index + highlight.quote.length + tail] === after[tail]) tail++;
+    if (score + tail > bestScore) {
+      best = index;
+      bestScore = score + tail;
+    }
+  }
+  return best;
+}
+function markHighlight(start, end, id) {
+  const walker = document.createTreeWalker($("article-body"), NodeFilter.SHOW_TEXT),
+    pieces = [];
+  let node,
+    offset = 0;
+  while ((node = walker.nextNode())) {
+    const from = Math.max(start, offset),
+      to = Math.min(end, offset + node.length);
+    if (from < to) pieces.push([node, from - offset, to - offset]);
+    offset += node.length;
+  }
+  for (const [text, from, to] of pieces) {
+    // Marks inside MathML would break the equation, so the whole formula is tinted instead.
+    const math = text.parentElement.closest(".article-math");
+    if (math) {
+      math.classList.add("article-highlight-math");
+      math.dataset.highlightId = id;
+      continue;
+    }
+    if (!text.data.slice(from, to).trim()) continue;
+    const middle = text.splitText(from);
+    middle.splitText(to - from);
+    const mark = document.createElement("mark");
+    mark.className = "article-highlight";
+    mark.dataset.highlightId = id;
+    middle.replaceWith(mark);
+    mark.append(middle);
+  }
+}
+function renderHighlights() {
+  clearHighlightMarks();
+  const highlights = currentArticle?.highlights || [],
+    all = $("article-body").textContent;
+  for (const highlight of highlights) {
+    const start = locateHighlight(all, highlight);
+    highlight.found = start >= 0;
+    if (start >= 0) markHighlight(start, start + highlight.quote.length, highlight.id);
+  }
+  $("highlights-panel").hidden = !highlights.length;
+  $("highlights-count").textContent = highlights.length ? `· ${highlights.length}` : "";
+  $("highlights-list").replaceChildren(
+    ...highlights.map((highlight) => {
+      const item = document.createElement("li"),
+        jump = document.createElement("button");
+      jump.type = "button";
+      jump.textContent = highlight.quote;
+      if (highlight.found) jump.onclick = () => jumpToHighlight(highlight.id);
+      else {
+        jump.disabled = true;
+        jump.title = "This passage is no longer in the saved text.";
+      }
+      item.append(jump);
+      return item;
+    }),
+  );
+}
+function jumpToHighlight(id) {
+  setPhoneView("read");
+  const mark = $("article-body").querySelector(`[data-highlight-id="${CSS.escape(id)}"]`);
+  if (!mark) return;
+  mark.scrollIntoView({ block: "center" });
+  mark.classList.add("highlight-flash");
+  setTimeout(() => mark.classList.remove("highlight-flash"), 1600);
+  activeHighlight = id;
+  updateSelectionBar();
+}
+$("article-body").addEventListener("click", (event) => {
+  if (!window.getSelection().isCollapsed) return;
+  const mark = event.target.closest?.("[data-highlight-id]");
+  activeHighlight = mark ? mark.dataset.highlightId : null;
+  updateSelectionBar();
+});
+$("remove-highlight").onclick = async () => {
+  const article = currentArticle,
+    id = activeHighlight;
+  if (!article || !id) return;
+  try {
+    await api("/api/highlight-delete", { id });
+    article.highlights = article.highlights.filter((item) => item.id !== id);
+    activeHighlight = null;
+    updateSelectionBar();
+    if (currentArticle === article) renderHighlights();
+  } catch (error) {
+    notice(error.message);
+  }
+};
+function copyText(button, text) {
+  const label = button.textContent;
+  navigator.clipboard
+    .writeText(text)
+    .then(() => {
+      button.textContent = "Copied";
+      setTimeout(() => (button.textContent = label), 1400);
+    })
+    .catch(() => notice("Your browser blocked copying. Select the text instead."));
+}
+// Reports often defang names as evil[.]exe, so the page text may not match the clean value.
+function jumpToText(value) {
+  setPhoneView("read");
+  const wanted = [value, value.replace(/\./g, "[.]"), value.replace(/\./g, "(.)"), value.replace(/\./g, "/")].map((item) => item.toLowerCase()),
+    walker = document.createTreeWalker($("article-body"), NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    // Same length as the original, so offsets still line up: sites print non-breaking hyphens.
+    const text = node.data.toLowerCase().replace(/[\u2010-\u2014]/g, "-");
+    const found = wanted.map((item) => text.indexOf(item)).find((index) => index >= 0);
+    if (found === undefined) continue;
+    const block = node.parentElement,
+      range = document.createRange();
+    range.setStart(node, found);
+    range.setEnd(node, found + wanted.find((item) => text.includes(item)).length);
+    block.scrollIntoView({ block: "center" });
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return;
+  }
+  // Some IDs exist only in a link, like a technique's name pointing at its ATT&CK page.
+  const link = [...$("article-body").querySelectorAll("a[href]")].find((anchor) =>
+    wanted.some((item) => anchor.getAttribute("href").toLowerCase().includes(item)),
+  );
+  if (link) {
+    link.scrollIntoView({ block: "center" });
+    const selection = window.getSelection();
+    selection.selectAllChildren(link);
+    return;
+  }
+  notice("That value isn't shown as plain text in this article.");
+}
+function iocGroup(title, items, label) {
+  const group = document.createElement("section"),
+    heading = document.createElement("div"),
+    name = document.createElement("h3"),
+    copyAll = document.createElement("button"),
+    list = document.createElement("ul");
+  group.className = "ioc-group";
+  heading.className = "ioc-group-heading";
+  name.textContent = `${title} · ${items.length}`;
+  copyAll.type = "button";
+  copyAll.textContent = "Copy all";
+  copyAll.setAttribute("aria-label", `Copy all ${title.toLowerCase()}`);
+  copyAll.onclick = () => copyText(copyAll, items.map((item) => item.value).join("\n"));
+  heading.append(name, copyAll);
+  for (const item of items) {
+    const row = document.createElement("li"),
+      value = document.createElement("button");
+    value.type = "button";
+    value.className = "ioc-value";
+    value.textContent = label ? `${label(item)} ${item.value}` : item.value;
+    if (item.name) {
+      const name = document.createElement("span");
+      name.className = "ioc-name";
+      name.textContent = item.retired ? `${item.name} (retired)` : item.name;
+      value.append(" ", name);
+    }
+    value.setAttribute("aria-label", `Find ${item.value}${item.name ? ", " + item.name + "," : ""} in the article`);
+    value.onclick = () => jumpToText(item.value);
+    row.append(value);
+    list.append(row);
+  }
+  group.append(heading, list);
+  return group;
+}
+function renderIOCs() {
+  const iocs = currentArticle?.iocs || {},
+    cves = iocs.cves || [],
+    techniques = iocs.techniques || [],
+    hashes = iocs.hashes || [],
+    files = iocs.files || [],
+    samples = files.filter((item) => !item.common),
+    common = files.filter((item) => item.common),
+    groups = [];
+  if (cves.length) groups.push(iocGroup("CVEs", cves));
+  if (techniques.length) groups.push(iocGroup("MITRE ATT&CK", techniques));
+  if (hashes.length) groups.push(iocGroup("File hashes", hashes, (item) => item.type));
+  if (samples.length) groups.push(iocGroup("File names", samples));
+  if (common.length) groups.push(iocGroup("Common tools and files", common));
+  $("iocs-groups").replaceChildren(...groups);
+  $("iocs-panel").hidden = !groups.length;
+  $("iocs-panel").open = false;
+  const parts = [];
+  if (cves.length) parts.push(`${cves.length} ${cves.length === 1 ? "CVE" : "CVEs"}`);
+  if (techniques.length) parts.push(`${techniques.length} ${techniques.length === 1 ? "TTP" : "TTPs"}`);
+  if (hashes.length) parts.push(`${hashes.length} ${hashes.length === 1 ? "hash" : "hashes"}`);
+  if (files.length) parts.push(`${files.length} ${files.length === 1 ? "file" : "files"}`);
+  $("iocs-count").textContent = parts.length ? `· ${parts.join(", ")}` : "";
+}
+function setPhoneView(view) {
+  const workspace = $("workspace");
+  if (workspace.dataset.phoneView === view) return;
+  // Hiding the pane resets its scroll, so the place is carried across the switch.
+  const fraction = $("article-pane").offsetParent ? articleFraction() : null;
+  if (fraction !== null) stashScroll();
+  workspace.dataset.phoneView = view;
+  for (const tab of document.querySelectorAll(".reader-tabs [role=tab]")) {
+    tab.setAttribute("aria-selected", String(tab.dataset.view === view));
+    if (tab.id === "tab-notes" && view === "notes") tab.textContent = "Notes";
+  }
+  if (view === "read" && currentArticle) restoreFraction(savedFraction(currentArticle));
+}
+for (const tab of document.querySelectorAll(".reader-tabs [role=tab]")) {
+  tab.addEventListener("mousedown", (event) => event.preventDefault());
+  tab.onclick = () => setPhoneView(tab.dataset.view);
+}
+let textScale = 1;
+try {
+  textScale = Number(localStorage.getItem("intel-text-scale")) || 1;
+} catch {}
+function applyTextScale() {
+  $("article-body").style.zoom = String(textScale);
+  $("text-smaller").disabled = textScale <= 0.85;
+  $("text-larger").disabled = textScale >= 1.5;
+}
+function changeTextScale(step) {
+  const fraction = articleFraction();
+  textScale = Math.round((Math.min(1.5, Math.max(0.85, textScale + step))) * 100) / 100;
+  try {
+    localStorage.setItem("intel-text-scale", String(textScale));
+  } catch {}
+  applyTextScale();
+  window.renderArticleMath?.();
+  renderHighlights();
+  restoreFraction(fraction);
+}
+$("text-smaller").onclick = () => changeTextScale(-0.1);
+$("text-larger").onclick = () => changeTextScale(0.1);
+$("theme-select").value = window.intelTheme?.get() || "auto";
+$("theme-select").onchange = () => window.intelTheme?.set($("theme-select").value);
 
 document.addEventListener("keydown", (event) => {
   if ($("complete").hidden) return;
@@ -783,9 +1341,33 @@ $("new-queue").onclick = async () => {
     notice(error.message);
   }
 };
+// Keeps what you're likely to read next on this device, in case the connection drops.
+function saveForOffline() {
+  if (!navigator.serviceWorker?.controller || !navigator.onLine || !state) return;
+  const upcoming = [
+    ...(state.queue && !state.queue.finished ? state.queue.items.map((item) => item.url) : []),
+    ...state.articles.filter((a) => a.triage === "keep" && !a.is_read).map((a) => a.url),
+    ...state.articles.filter((a) => !a.is_read && !a.triage).map((a) => a.url),
+  ];
+  (async () => {
+    for (const url of [...new Set(upcoming)].slice(0, 30)) {
+      if (!navigator.onLine) return;
+      await fetch("/api/article?" + new URLSearchParams({ url })).catch(() => {});
+    }
+  })();
+}
 (async () => {
   try {
+    try {
+      const pending = localStorage.getItem("intel-pending-save");
+      if (pending) {
+        localStorage.removeItem("intel-pending-save");
+        location.replace("/save" + pending);
+        return;
+      }
+    } catch {}
     state = await api("/api/state");
+    setTimeout(saveForOffline, 2000);
     const view = new URLSearchParams(location.search).get("view");
     const open = new URLSearchParams(location.search).get("open");
     if (open) {
@@ -814,6 +1396,7 @@ $("load-media").addEventListener("change", () => {
     $("article-body").innerHTML = currentArticle.body_html;
     renderMedia();
     window.renderArticleMath?.();
+    renderHighlights();
     $("article-pane").scrollTop = scroll;
   }
 });
@@ -847,7 +1430,7 @@ function renderMedia() {
   const isVideoArticle = ["audio", "video"].includes(currentArticle?.content_format) || currentArticle?.url.startsWith("https://www.youtube.com/watch?v=");
   if (!mediaEnabled && !isVideoArticle) return;
   for (const block of $("article-body").querySelectorAll(
-    "blockquote[data-media-url]",
+    "figure[data-media-url]",
   )) {
     let url;
     try {
@@ -859,7 +1442,10 @@ function renderMedia() {
     let media;
     if (block.dataset.mediaKind === "image") {
       media = document.createElement("img");
-      media.alt = block.dataset.mediaDescription;
+      media.alt =
+        block.dataset.mediaDescription === "No description supplied"
+          ? ""
+          : block.dataset.mediaDescription;
       media.loading = "lazy";
       media.decoding = "async";
     } else if (block.dataset.mediaKind === "audio") {
@@ -884,24 +1470,38 @@ function renderMedia() {
       } else if (/\.(mp4|webm|ogv|ogg)$/i.test(url.pathname)) {
         media = document.createElement("video");
         media.controls = true;
-        media.preload = "none";
+        media.preload = "metadata";
       } else continue;
     }
     media.className = "article-media";
-    media.referrerPolicy = "no-referrer";
+    // YouTube's player refuses to run (Error 153) unless it can see an origin.
+    media.referrerPolicy = media.tagName === "IFRAME" ? "strict-origin" : "no-referrer";
+    // An image opens at full size, which keeps diagrams readable on a phone.
+    let frame = media;
+    if (media.tagName === "IMG") {
+      frame = document.createElement("a");
+      frame.className = "media-link";
+      frame.href = url.href;
+      frame.target = "_blank";
+      frame.rel = "noopener noreferrer";
+      frame.append(media);
+      media.addEventListener("load", () => frame.classList.add("media-ready"), { once: true });
+    }
     media.addEventListener(
       "error",
       () => {
-        media.remove();
+        frame.remove();
+        block.classList.remove("is-loaded");
         const message = document.createElement("p");
-        message.textContent =
-          "Media could not load. Use the original link below.";
+        message.className = "media-error";
+        message.textContent = "Media could not load.";
         block.prepend(message);
       },
       { once: true },
     );
     media.src = url.href;
-    block.prepend(media);
+    block.prepend(frame);
+    block.classList.add("is-loaded");
     if (["AUDIO", "VIDEO"].includes(media.tagName)) {
       const controls = document.createElement("div");
       controls.className = "playback-tools";
@@ -991,6 +1591,10 @@ function plainHTML(text) {
   p.textContent = text;
   return p.innerHTML.replace(/\n/g, "<br>");
 }
+function noteLink(node) {
+  const href = (node.getAttribute("href") || "").trim();
+  return /^(https?:|mailto:)/i.test(href) ? href : "";
+}
 function sanitizeNotes(html) {
   const template = document.createElement("template");
   template.innerHTML = html;
@@ -1011,14 +1615,26 @@ function sanitizeNotes(html) {
         "ul",
         "ol",
         "li",
+        "pre",
+        "code",
       ];
+    const href = tag === "a" ? noteLink(node) : "";
+    const checklist = tag === "ul" && node.classList.contains("checklist"),
+      checked = tag === "li" && node.dataset.checked === "true";
     const result = document.createElement(
       tag === "span" && node.style.backgroundColor
         ? "mark"
-        : allowed.includes(tag)
+        : allowed.includes(tag) || href
           ? tag
           : "span",
     );
+    if (checklist) result.className = "checklist";
+    if (checked) result.dataset.checked = "true";
+    if (href) {
+      result.setAttribute("href", href);
+      result.setAttribute("target", "_blank");
+      result.setAttribute("rel", "noopener noreferrer");
+    }
     for (const child of node.childNodes) result.append(clean(child));
     if (result.tagName === "SPAN") {
       const fragment = document.createDocumentFragment();
@@ -1074,6 +1690,16 @@ function noteChanged() {
   $("notes").dispatchEvent(new Event("input"));
 }
 function insertCallout(text, html = null) {
+  // On a phone's Read tab the editor is hidden and can't take a caret or show a keyboard.
+  if ($("notes").offsetParent === null) {
+    $("notes").insertAdjacentHTML(
+      "beforeend",
+      "<blockquote>" + (html ? sanitizeNotes(html) : plainHTML(text)) + "</blockquote><div><br></div>",
+    );
+    $("tab-notes").textContent = "Notes · added";
+    noteChanged();
+    return;
+  }
   focusNotes();
   const selection = window.getSelection();
   if (selection.rangeCount) selection.collapseToEnd();
@@ -1090,7 +1716,21 @@ function selectionFormatState(kind) {
   const selection = window.getSelection();
   if (!selection.rangeCount || !$("notes").contains(selection.anchorNode))
     return false;
-  const selector = kind === "bold" ? "b,strong" : "mark";
+  const selector =
+    kind === "bold"
+      ? "b,strong"
+      : kind === "list"
+        ? "ul:not(.checklist),ol"
+        : kind === "checklist"
+          ? "ul.checklist"
+          : "mark";
+  if (kind === "list" || kind === "checklist") {
+    const node =
+      selection.anchorNode.nodeType === 1
+        ? selection.anchorNode
+        : selection.anchorNode.parentElement;
+    return !!node.closest(selector);
+  }
   if (selection.isCollapsed) {
     if (kind === "bold") return document.queryCommandState("bold");
     const node =
@@ -1114,7 +1754,7 @@ function selectionFormatState(kind) {
   return found;
 }
 function updateFormatButtons() {
-  for (const kind of ["bold", "highlight"]) {
+  for (const kind of ["bold", "highlight", "list", "checklist"]) {
     const button = document.querySelector(`[data-format="${kind}"]`);
     button.setAttribute("aria-pressed", String(selectionFormatState(kind)));
   }
@@ -1176,7 +1816,7 @@ function formatSelection(kind) {
     highlight = highlight || tag === "mark";
     italic = italic || ["i", "em"].includes(tag);
     const inline = ["b", "strong", "mark", "i", "em", "span"].includes(tag),
-      target = inline ? fragment : document.createElement(tag);
+      target = inline ? fragment : node.cloneNode(false);
     for (const child of node.childNodes)
       target.append(rebuild(child, bold, highlight, italic));
     return target;
@@ -1209,6 +1849,71 @@ function formatSelection(kind) {
   noteChanged();
   updateFormatButtons();
 }
+// Chrome moves the caret to the start of existing text when it wraps it in a list.
+function toggleNoteList() {
+  const selection = window.getSelection(),
+    collapsed = selection.isCollapsed,
+    prefix = document.createRange();
+  prefix.selectNodeContents($("notes"));
+  prefix.setEnd(selection.focusNode, selection.focusOffset);
+  const caret = prefix.toString().length;
+  document.execCommand("insertUnorderedList");
+  if (!collapsed) return;
+  // A new empty bullet has no text to land in, and Chrome already put the caret there.
+  const focus = selection.focusNode,
+    line = (focus?.nodeType === 1 ? focus : focus?.parentElement)?.closest("li");
+  if (line && !line.textContent.trim()) return;
+  const walker = document.createTreeWalker($("notes"), NodeFilter.SHOW_TEXT);
+  let node,
+    total = 0;
+  while ((node = walker.nextNode())) {
+    if (total + node.length >= caret) {
+      selection.collapse(node, caret - total);
+      noteRange = selection.getRangeAt(0).cloneRange();
+      return;
+    }
+    total += node.length;
+  }
+}
+function caretElement() {
+  const node = window.getSelection().focusNode;
+  return node?.nodeType === 1 ? node : node?.parentElement;
+}
+function plainListItems(list) {
+  list.classList.remove("checklist");
+  if (!list.classList.length) list.removeAttribute("class");
+  for (const item of list.children) delete item.dataset.checked;
+}
+function toggleChecklist() {
+  const list = caretElement()?.closest("ul");
+  if (list?.classList.contains("checklist")) {
+    toggleNoteList();
+    return;
+  }
+  if (!list) toggleNoteList();
+  caretElement()?.closest("ul")?.classList.add("checklist");
+}
+// The tick box is drawn in the item's left padding, so it's not text the caret can enter.
+function checklistBoxItem(event) {
+  const item = event.target.closest?.("ul.checklist > li");
+  return item && event.clientX - item.getBoundingClientRect().left < 26 ? item : null;
+}
+$("notes").addEventListener("mousedown", (event) => {
+  if (checklistBoxItem(event)) event.preventDefault();
+});
+$("notes").addEventListener("click", (event) => {
+  const item = checklistBoxItem(event);
+  if (!item || busy) return;
+  if (item.dataset.checked === "true") delete item.dataset.checked;
+  else item.dataset.checked = "true";
+  noteChanged();
+});
+// Enter copies the item's attributes, and a new task shouldn't start out ticked.
+$("notes").addEventListener("input", (event) => {
+  if (event.inputType !== "insertParagraph") return;
+  const item = caretElement()?.closest("ul.checklist > li");
+  if (item && !item.textContent.trim()) delete item.dataset.checked;
+});
 let clearTypingFormat = false;
 $("notes").addEventListener("beforeinput", (event) => {
   if (
@@ -1257,6 +1962,16 @@ document.querySelectorAll("[data-format]").forEach((button) => {
     if (action === "callout") {
       document.execCommand("formatBlock", false, "blockquote");
       noteChanged();
+    } else if (action === "list") {
+      const checklist = caretElement()?.closest("ul.checklist");
+      if (checklist) plainListItems(checklist);
+      else toggleNoteList();
+      noteChanged();
+      updateFormatButtons();
+    } else if (action === "checklist") {
+      toggleChecklist();
+      noteChanged();
+      updateFormatButtons();
     } else formatSelection(action);
   };
 });
@@ -1265,6 +1980,22 @@ $("notes").addEventListener("keydown", (event) => {
     event.preventDefault();
     formatSelection("bold");
   }
+  // The same tick from the keyboard: Cmd or Ctrl+Enter on the current item.
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    const item = caretElement()?.closest("ul.checklist > li");
+    if (!item) return;
+    event.preventDefault();
+    if (item.dataset.checked === "true") delete item.dataset.checked;
+    else item.dataset.checked = "true";
+    noteChanged();
+  }
+});
+// Links in an editable box place the caret, so opening one takes a modifier.
+$("notes").addEventListener("click", (event) => {
+  const link = event.target.closest?.("a");
+  if (!link || !(event.metaKey || event.ctrlKey)) return;
+  event.preventDefault();
+  window.open(link.href, "_blank", "noopener,noreferrer");
 });
 
 $("notes").addEventListener("paste", (event) => {

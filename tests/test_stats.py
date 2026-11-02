@@ -18,5 +18,5 @@ def test_first_read_history_and_toronto_date(tmp_path):
     db.execute('UPDATE articles SET is_read=1')
     page=render_stats(db,datetime(2026,10,2,12,tzinfo=timezone.utc))
     assert '2026-10-01: 1 article read' in page
-    assert '1 articles read · 1 active days' in page
+    assert '1 article read · 1 active day' in page
     assert db.execute('SELECT count(*) FROM article_reads').fetchone()[0]==1

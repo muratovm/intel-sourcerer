@@ -1,4 +1,5 @@
 """Persistent reading queues and article notes."""
+import re
 import sqlite3
 import bleach
 from bs4 import BeautifulSoup
@@ -49,13 +50,25 @@ def create_queue(db, urls):
     return queue_state(db)
 
 
+def _note_attribute(tag, name, value):
+    if tag == 'a':
+        return name in {'href', 'target', 'rel'}
+    return (tag, name, value) in {('ul', 'class', 'checklist'), ('li', 'data-checked', 'true')}
+
+
 def clean_notes(text):
     soup=BeautifulSoup(text,'html.parser')
     for tag in list(soup.find_all(True)):
         if 'background-color' in tag.get('style','') and tag.name!='mark':
             if tag.name=='span':tag.name='mark'
             else:tag.wrap(soup.new_tag('mark'))
-    return bleach.clean(str(soup),tags=['p','div','br','strong','b','em','i','mark','blockquote','ul','ol','li'],attributes={},strip=True)
+    for link in soup.find_all('a'):
+        href=str(link.get('href','')).strip()
+        if not re.match(r'(https?:|mailto:)',href,re.I):
+            link.unwrap()
+            continue
+        link.attrs={'href':href,'target':'_blank','rel':'noopener noreferrer'}
+    return bleach.clean(str(soup),tags=['p','div','br','strong','b','em','i','mark','blockquote','ul','ol','li','pre','code','a'],attributes=_note_attribute,protocols=['http','https','mailto'],strip=True)
 
 
 def save_notes(db,url,text,revision,format='plain'):
@@ -101,6 +114,8 @@ def delete_article(db,url):
         db.executemany('INSERT INTO queue_items VALUES (?,?,?)',[(queue['id'],i,u) for i,u in enumerate(remaining)])
         cursor=max(0,queue['cursor']-int(removed<queue['cursor']))
         db.execute('UPDATE reading_queues SET cursor=?,finished=? WHERE id=?',(min(cursor,max(0,len(remaining)-1)),int(bool(queue['finished']) or not remaining),queue['id']))
+    db.execute('DELETE FROM article_highlights WHERE article_url=?',(url,))
+    db.execute('DELETE FROM reading_positions WHERE article_url=?',(url,))
     db.execute('DELETE FROM timed_reading_sessions WHERE article_url=?',(url,))
     db.execute('DELETE FROM article_reads WHERE article_url=?',(url,))
     db.execute('DELETE FROM articles WHERE url=?',(url,))

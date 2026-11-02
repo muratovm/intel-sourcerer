@@ -181,7 +181,7 @@ id = "redcanary"
 name = "Red Canary Threat Intelligence"
 source_type = "security_vendor"
 enabled = false
-parent_url = "https://www.zscaler.com/blogs"
+parent_url = "https://redcanary.com/blog"
 rss_url = "https://redcanary.com/feed/"
 notes = "Behavior-focused threat research, malware campaigns, and detection intelligence. Working feed covers a broader publication than this research index; relevance filtering is needed."
 

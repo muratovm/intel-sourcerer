@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 from bs4 import BeautifulSoup
 
-from .content import extract_markdown, render_markdown
+from .content import arrange_media, extract_article, render_article_html, render_markdown
 from .templates import UI_ROOT, load_template
 from .viewer import CSP, STATIC_FILES
 
@@ -31,12 +31,14 @@ def prepare_article(record, index):
     markdown = record.get("content_markdown", record.get("markdown"))
     text = record.get("content_text", record.get("text"))
     html = record.get("body_html", record.get("html"))
+    clean_html = None
     if html and not markdown:
-        markdown, _ = extract_markdown(str(html), url)
+        clean_html, markdown, _ = extract_article(str(html), url)
     if not isinstance(markdown or text, str) or not (markdown or text).strip():
         raise ValueError(
             "Supply markdown, content_markdown, text, or html for each article."
         )
+    from .iocs import extract_iocs
     from .sessions import clean_notes, has_notes
 
     notes_format = record.get("notes_format", "plain")
@@ -51,7 +53,9 @@ def prepare_article(record, index):
     except (ValueError, TypeError):
         raise ValueError("published_at must be an ISO date or timestamp.") from None
     body = BeautifulSoup(
-        render_markdown(markdown)
+        render_article_html(clean_html)
+        if clean_html
+        else render_markdown(markdown)
         if markdown
         else "<p>" + escape(text).replace("\n", "<br>") + "</p>",
         "html.parser",
@@ -63,26 +67,7 @@ def prepare_article(record, index):
     )
     if heading:
         heading.decompose()
-    for block in body.find_all("blockquote"):
-        label, link = block.find("strong"), block.find("a", href=True)
-        if (
-            label
-            and link
-            and label.get_text().strip()
-            in {
-                "Image placeholder:",
-                "Video placeholder:",
-                "Audio placeholder:",
-                "Embedded media placeholder:",
-            }
-        ):
-            from .content import safe_url
-
-            media_url = safe_url(link["href"], url)
-            if media_url:
-                block["data-media-url"] = media_url
-                block["data-media-kind"] = label.get_text().split()[0].lower()
-                block["data-media-description"] = block.get_text(" ", strip=True)
+    arrange_media(body, title, url)
     return {
         "source": record.get("source")
         or {
@@ -106,6 +91,8 @@ def prepare_article(record, index):
         "content_format": "article",
         "content_markdown": markdown or "",
         "body_html": str(body),
+        "iocs": extract_iocs(str(body)),
+        "body_format": "html" if clean_html else "markdown",
         "notes": notes,
         "notes_format": notes_format,
         "notes_revision": 0,
@@ -145,10 +132,10 @@ def load_article(value):
         data, url, suffix = path.read_bytes(), path.as_uri(), path.suffix.lower()
         pdf = suffix == ".pdf"
     if pdf:
-        from .pdf_content import extract_pdf
+        from .pdf_content import extract_pdf_html
 
-        title, _, markdown = extract_pdf(data, url)
-        return {"url": url, "title": title, "markdown": markdown}
+        title, _, pdf_html = extract_pdf_html(data, url)
+        return {"url": url, "title": title, "html": pdf_html}
     text = data.decode("utf-8")
     if suffix in {".md", ".markdown", ".txt"}:
         heading = next(
@@ -351,10 +338,10 @@ def load_public_article(value, *, prefer_arxiv=True):
                     if len(data) > 20_000_000:
                         raise ValueError("Article exceeds 20 MB.")
                 if data.startswith(b"%PDF-"):
-                    from .pdf_content import extract_pdf
+                    from .pdf_content import extract_pdf_html
 
-                    title, _, markdown = extract_pdf(bytes(data), value)
-                    return {"url": value, "title": title, "markdown": markdown}
+                    title, _, pdf_html = extract_pdf_html(bytes(data), value)
+                    return {"url": value, "title": title, "html": pdf_html}
                 soup = BeautifulSoup(bytes(data), "html.parser")
                 title = soup.find("h1") or soup.find("title")
                 return {
@@ -368,11 +355,11 @@ def load_public_article(value, *, prefer_arxiv=True):
 def parse_session_content(body, content_type):
     """Stateless parsing: sources arrive from the tab and are never persisted."""
     if content_type.startswith("application/pdf"):
-        from .pdf_content import extract_pdf
+        from .pdf_content import extract_pdf_html
 
         url = "https://temporary.invalid/" + uuid.uuid4().hex + ".pdf"
-        title, _, markdown = extract_pdf(body, url)
-        records = [{"title": title, "url": url, "markdown": markdown}]
+        title, _, pdf_html = extract_pdf_html(body, url)
+        records = [{"title": title, "url": url, "html": pdf_html}]
     else:
         records = json.loads(body).get("articles")
     if not isinstance(records, list) or not 1 <= len(records) <= 100:

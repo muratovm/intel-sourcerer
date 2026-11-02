@@ -12,6 +12,7 @@ intel-sourcerer-web = "intel_sourcerer.web:main"
 intel-sourcerer-backend = "intel_sourcerer.backend:main"
 intel-sourcerer-viewer = "intel_sourcerer.viewer:main"
 intel-sourcerer-reader = "intel_sourcerer.temporary:main"
+intel-sourcerer-reparse = "intel_sourcerer.reparse:main"
 
 [dependency-groups]
 dev = ["pytest>=8,<10"]

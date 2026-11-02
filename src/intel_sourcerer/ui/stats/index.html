@@ -21,7 +21,7 @@
       <div class="stats-content">
         <h1>Your reading year · ${today_year}</h1>
         <p class="muted">
-          ${total} articles read · ${active_days} active days · America/Toronto
+          ${total_label} · ${active_days_label} · America/Toronto
         </p>
         <div class="heat-scroll">
           <div class="heat-months">${month_labels}</div>
@@ -52,8 +52,7 @@
           focus a day to see its count.
         </p>
         <p class="muted">
-          ${undated} previously read articles have no recorded read date and are
-          excluded from the heatmap.
+          ${undated_label} excluded from the heatmap.
         </p>
         ${timed_sessions}
       </div>

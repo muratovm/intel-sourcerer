@@ -26,16 +26,16 @@ uv run pytest -q
 
 ## Reading workflow
 
-- **Home:** resume the current session, build a new queue, and revisit saved note previews.
+- **Home:** resume the current session, find new articles, build a new queue, and revisit saved note previews. **To triage** lists unread articles to Keep or Skip, with Undo and a bulk skip for anything older than 30 days. **Kept to read** starts a session from what you kept. Skipped articles leave the queue builder but stay in the Library. A line shows articles saved and read in the last 7 days.
 - **Queue builder:** filter articles by searchable source, article type, and timeframe. Hide read articles or show noted articles using independent checkboxes. Find latest articles checks all enabled configured sources.
-- **Your queue:** add/remove articles with the Add/Added button, drag to reorder, or use the ordering buttons. Drop article URLs or paste a link to import a public HTML page manually.
-- **Reading view:** read the saved article alongside autosaving notes. Resize the divider, quote selected passages into callouts, and apply bold or highlights. Next advances without changing read status; Mark read & next records the read and advances. Return to the builder with the current selection intact, or go Home.
+- **Your queue:** add/remove articles with the Add/Added button, drag saved articles anywhere in the queue section, drag to reorder, or use the ordering buttons. Over a queue row, a line shows which side the article lands on. Drop article URLs or files, or paste a link, to import a page manually.
+- **Reading view:** read the saved article alongside autosaving notes. Resize the divider, select text to highlight it or quote it into notes, and format notes with bold, highlight, callouts, lists, and checklists. Quotes keep code blocks, links, and math as TeX. Text size and Auto/Light/Dark theme are at the top of each article. Next advances without changing read status; Mark read & next records the read and advances. Return to the builder with the current selection intact, or go Home.
 - **Completion:** finishing the queue opens a centered popup. Starting another queue does not require finishing the previous one.
 - **Library:** search titles, publishers, full saved article text, and notes, including disabled sources. Select a result to preview its formatted notes beside the article list; use With notes to narrow the list. Open an article without replacing your reading queue, or export its article and notes as Markdown. Articles sort by publication date, newest first.
 - **Sources:** view configured publishers and toggle them on/off. Changes persist to the TOML configuration and database. Disabled sources stop appearing in discovery results; stored articles and notes are retained.
 - **Stats:** this year's daily reading heatmap in America/Toronto time. Each article counts once on its first recorded read. Previously read articles without timestamps are excluded. Changing read status later does not erase activity.
 
-Queues and reading position persist in SQLite. Browser storage retains queue drafts, note drafts, article scroll positions, divider width, and media preferences. Notes are saved before leaving the reader; conflicting note edits are rejected to avoid overwriting newer changes.
+Queues, reading position, highlights, and triage decisions persist in SQLite, so your place in an article follows you between devices; the most recent position wins. Browser storage retains queue drafts, note drafts, divider width, text size, theme, and media preferences. Notes are saved before leaving the reader; conflicting note edits are rejected to avoid overwriting newer changes.
 
 ## Sources and collection
 
@@ -55,7 +55,20 @@ Cybersecurity relevance and article-type labels use keyword rules, not AI classi
 
 ## Saved articles and media
 
-Articles are stored as text and Markdown with headings, lists, tables, links, and media placeholders. Blog header images can be captured from Open Graph/Twitter metadata. Multi-section reports use the enclosing main content when it contains several separate article sections; unusual layouts can still include unrelated material.
+Articles are stored as sanitized HTML, which the reader displays, plus Markdown for export and older entries. Code, regex, tables, and math (rendered with KaTeX) survive as written, and PDFs keep their links, bullets, and code lines. Blog header images can be captured from Open Graph/Twitter metadata. Multi-section reports use the enclosing main content when it contains several separate article sections.
+
+Site furniture is removed when an article is saved: tag and topic lists, navigation, share bars, product promos, and related-article cards (`boilerplate.py`). The rules match exact labels and link-only blocks, keep sections such as Footnotes, References, and Acknowledgements, and leave an article alone if they would remove more than half of it. Unusual sites can still leave some clutter. Markdown exports and Library search still use the original text. A category that a listing page ran into a title is also dropped when the article's own heading settles it.
+
+```sh
+# Re-fetch and re-parse articles that have no clean HTML yet (--all for every article)
+uv run intel-sourcerer-reparse
+
+# Apply the current furniture and title rules to saved articles, with no fetching
+uv run intel-sourcerer-reparse --reclean --dry-run
+uv run intel-sourcerer-reparse --reclean
+```
+
+Back up the database before running these on a library you care about.
 
 **Load article media** optionally loads linked images, supported direct videos, and YouTube/Vimeo embeds from external hosts. Media is not downloaded into the database. JavaScript-rendered charts, dynamic content, and unsupported video players may not be captured. Original article and media links remain available.
 
@@ -73,10 +86,39 @@ Key modules in `src/intel_sourcerer/`:
 | --- | --- |
 | `config.py`, `feeds.py` | Source configuration and RSS/Atom fetching |
 | `importer.py`, `discovery.py` | Configured-source collection and manual links |
-| `content.py` | Markdown extraction, media placeholders, rendering |
-| `storage.py`, `sessions.py` | Articles, queues, notes, and read history |
+| `content.py`, `pdf_content.py`, `pdf_layout.py` | Clean HTML and Markdown extraction, media placeholders, rendering |
+| `boilerplate.py`, `reparse.py` | Site furniture removal and rebuilding saved articles |
+| `iocs.py`, `update_attack_names.py`, `attack_names.json` | Indicator extraction and the bundled MITRE name lookup |
+| `storage.py`, `sessions.py`, `reading_state.py` | Articles, queues, notes, read history, highlights, positions, triage |
 | `viewer.py`, `ui/`, page renderers | Stateless interface and backend gateway |
 | `backend.py`, `web.py`, `auth.py`, storage modules | Private authentication and article API |
+
+## Saving from anywhere
+
+Home → **Set up one-click saving** opens `/save`, with a bookmarklet to drag to your bookmarks bar. On Android, install the app and use the Share menu. On iPhone, the page explains a Shortcut that opens the same link. Saving always needs one press on the page, so another site can't add articles to your library. The server fetches the page itself, so paywalled or logged-in articles won't save their full text.
+
+## Phone and offline
+
+Below 700px the reader switches to Read and Notes tabs, and the app can be installed from the browser over HTTPS or localhost. A service worker answers from the network first and falls back to a local copy. Your queue, kept articles, and the next unread articles are stored ahead of time, up to 30 at a time. Offline reading covers article text, not images from other sites. Notes written offline stay in the browser and are sent when the connection returns. Signing in or out clears the offline copies. Guest sessions are never cached.
+
+## Indicators
+
+The reader's **IOCs** panel lists what it finds in the article text, each group with **Copy all**, and selecting a value jumps to it in the article:
+
+- **CVEs**, normalized to uppercase.
+- **MITRE IDs** with their names: ATT&CK techniques, sub-techniques, and tactics (Enterprise, Mobile, ICS) and ATLAS. Retired IDs are marked. IDs that exist only in a link to an ATT&CK or CVE page count too.
+- **File hashes:** MD5, SHA-1, SHA-256, and SHA-512.
+- **File names**, including defanged ones and names inside paths. Everyday tools such as `cmd.exe` sit in their own group, so Copy all gives you just the samples.
+
+Markdown exports include an Indicators section. Everything is found by pattern with no network lookups, so check values in context: a mention isn't a finding, and a hash-shaped value may not be a file hash. Copy all copies IDs without names.
+
+The names come from a bundled lookup that doesn't update itself. After MITRE publishes a new version, rebuild it and restart the server:
+
+```sh
+uv run --with pyyaml python -m intel_sourcerer.update_attack_names
+```
+
+MITRE ATT&CK and ATLAS are © The MITRE Corporation. ATT&CK® is a registered trademark of The MITRE Corporation. This project isn't affiliated with or endorsed by MITRE.
 
 ## Planned work
 
@@ -103,7 +145,7 @@ Page layouts and their JavaScript live together under `src/intel_sourcerer/ui/`.
 
 ## Timed reading and notes
 
-In the reader, choose a target (defaults to the article reading estimate) and start the timer. Pause/resume excludes paused time; switching tabs or leaving through reader navigation pauses automatically. Reloads retain the session. Overtime keeps counting. Finish reading & notes saves notes first, records the attempt, and marks the article read without advancing the queue. End attempt records an abandoned attempt separately.
+In the reader's header, choose a target (defaults to the article reading estimate) and start the timer. A blue line along the bottom of the header fills as time passes. Pause/resume excludes paused time; switching tabs or leaving through reader navigation pauses automatically. Reloads retain the session. Overtime keeps counting. Finish reading & notes saves notes first, records the attempt, and marks the article read without advancing the queue. End attempt records an abandoned attempt separately.
 
 Stats shows completion rates against your target and the default 200-word/minute estimate, weighted reading-and-annotation pace, weekly summaries, and recent sessions. Pace measures article words per active minute, including time spent taking notes; it does not measure comprehension. Abandoned attempts are excluded. Only one timer can be active at a time. Deleting an article deletes its timed sessions too.
 
@@ -149,7 +191,9 @@ accounts, sessions, private libraries, configuration, and uploaded files.
 
 See [hosting instructions and architecture](docs/hosting.md) for commands,
 environment variables, HTTPS setup, and the API boundary. `intel-sourcerer-web`
-runs both modes on a single server for local development.
+runs both modes on a single server for local development. One-click saving,
+installing the app, offline reading, and theme switching are only served by
+`intel-sourcerer-web` for now.
 
 ## Temporary reader without accounts or a backend
 

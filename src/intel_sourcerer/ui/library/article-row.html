@@ -2,7 +2,10 @@
   class="lib-item ${selected_class}"
   href="${selection_url}"
   ${current_attribute}
-  ><span class="lib-publisher">${publisher}</span>
+  ><span class="format-chip format-${format_class}">${format_label}</span>
   <h2>${title}</h2>
-  <span class="lib-meta">${published_date}${badges}</span></a
+  <span class="lib-meta"
+    ><span class="lib-publisher">${publisher}</span
+    ><span>${published_date}</span>${badges}</span
+  ></a
 >

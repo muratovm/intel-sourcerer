@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 from bs4 import BeautifulSoup
 import trafilatura
-from .content import extract_markdown
+from .content import extract_article
 from .pdf_content import extract_pdf
 from .config import PublisherSource
 from .feeds import Article
@@ -118,8 +118,8 @@ async def import_link(database, url):
         now=datetime.now(timezone.utc);published=now
         if is_pdf:
             title,content,markdown=await asyncio.to_thread(extract_pdf,payload,url)
-            from .pdf_layout import extract_layout
-            markdown,media=await asyncio.to_thread(extract_layout,payload,url,Path(database).resolve().parent / 'pdf-assets')
+            from .pdf_layout import extract_layout_article
+            clean_html,markdown,media=await asyncio.to_thread(extract_layout_article,payload,url,Path(database).resolve().parent / 'pdf-assets')
         else:
             soup=BeautifulSoup(html,'html.parser');title=soup.find('meta',property='og:title')
             title=title.get('content') if title else soup.title.get_text(strip=True) if soup.title else urlsplit(url).hostname
@@ -129,7 +129,7 @@ async def import_link(database, url):
                 markdown=f'Saved social link. This platform did not expose readable post text. Open the original to view it.\n\n[Open post]({url})'
                 return save_item(database,url,title or 'Social post',markdown,'social',urlsplit(url).hostname)
             if not content:raise ValueError('No readable article text found. Try the publisher’s direct article link.')
-            markdown,media=extract_markdown(html,content_url)
+            clean_html,markdown,media=extract_article(html,content_url)
             stamp=soup.find('meta',property='article:published_time') or soup.find('time',datetime=True)
             if stamp:
                 try:published=datetime.fromisoformat((stamp.get('content') or stamp.get('datetime')).replace('Z','+00:00'));published=published if published.tzinfo else published.replace(tzinfo=timezone.utc)
@@ -138,7 +138,7 @@ async def import_link(database, url):
         source=PublisherSource('link-'+hashlib.sha256(host.encode()).hexdigest()[:12],host,'http://localhost' if local_path else 'https://'+host,'manual')
         save_source(db,source)
         article=Article(host,title,url,url,published,None,None,'')
-        save_article(db,source.id,article,content=content,error=None,reason='Manually added link; date defaults to added time if publisher date is unavailable',discovered_at=now.isoformat(),markdown=markdown,media=media)
+        save_article(db,source.id,article,content=content,error=None,reason='Manually added link; date defaults to added time if publisher date is unavailable',discovered_at=now.isoformat(),markdown=markdown,media=media,html=clean_html)
         content_format='paper' if is_pdf else 'social' if social_host else 'newsletter' if 'substack.com' in host else 'article'
         db.execute('UPDATE articles SET content_format=? WHERE url=?',(content_format,url))
         db.commit();return url

@@ -9,7 +9,7 @@ from urllib.parse import urlsplit, unquote
 import hashlib
 import feedparser
 from bs4 import BeautifulSoup
-from .content import extract_markdown, render_markdown
+from .content import extract_article, extract_markdown, render_markdown
 from .config import PublisherSource
 from .feeds import Article
 from .storage import connect_database, save_source, save_article
@@ -20,7 +20,7 @@ DOCUMENTS = {'.eml', '.pptx'}
 SUPPORTED = AUDIO | VIDEO | DOCUMENTS | {'.pdf'}
 
 
-def save_item(database, url, title, markdown, content_format, publisher, author=None):
+def save_item(database, url, title, markdown, content_format, publisher, author=None, html=None):
     db = connect_database(database)
     try:
         existing = db.execute('SELECT 1 FROM articles WHERE url=?', (url,)).fetchone()
@@ -30,7 +30,7 @@ def save_item(database, url, title, markdown, content_format, publisher, author=
         now = datetime.now(timezone.utc)
         save_source(db, source)
         text = BeautifulSoup(render_markdown(markdown), 'html.parser').get_text(' ', strip=True)
-        save_article(db, source.id, Article(publisher,title,url,url,now,author,None,''), content=text, error=None, reason='Manually imported media; publication date defaults to import time', discovered_at=now.isoformat(),markdown=markdown)
+        save_article(db, source.id, Article(publisher,title,url,url,now,author,None,''), content=text, error=None, reason='Manually imported media; publication date defaults to import time', discovered_at=now.isoformat(),markdown=markdown,html=html)
         db.execute('UPDATE articles SET content_format=? WHERE url=?', (content_format,url))
         db.commit()
         return url
@@ -78,8 +78,8 @@ async def import_file(database, payload, filename):
             raise ValueError('This email has no readable body.')
         value = body.get_content()
         html = value if body.get_content_type() == 'text/html' else '<article><p>' + escape(value).replace('\n','<br>') + '</p></article>'
-        markdown,_ = extract_markdown(html,'https://newsletter.invalid/')
-        return save_item(database,identity,title,markdown,'newsletter','Email newsletters',str(message.get('From') or ''))
+        clean_html,markdown,_ = extract_article(html,'https://newsletter.invalid/')
+        return save_item(database,identity,title,markdown,'newsletter','Email newsletters',str(message.get('From') or ''),html=clean_html)
     from pptx import Presentation
     import zipfile
     if not zipfile.is_zipfile(BytesIO(payload)):
@@ -111,8 +111,8 @@ async def import_file(database, payload, filename):
             if notes.strip():
                 html.append('<h3>Speaker notes</h3><p>'+escape(notes)+'</p>')
     html.append('</article>')
-    markdown,_ = extract_markdown(''.join(html),'https://slides.invalid/')
-    return save_item(database,identity,title,markdown,'slides','Slide decks')
+    clean_html,markdown,_ = extract_article(''.join(html),'https://slides.invalid/')
+    return save_item(database,identity,title,markdown,'slides','Slide decks',html=clean_html)
 
 
 async def import_podcast_feed(database, payload, url):

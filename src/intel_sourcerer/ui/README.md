@@ -10,7 +10,10 @@ UI files are grouped by page. Browser URLs are unchanged; viewer.py serves these
 - library/index.html and library/library.js: Library layout, selection, imports, and deletion. Article rows and notes preview are separate HTML components beside them.
 - sources/index.html and sources/sources.js: source configuration display and toggles.
 - stats/index.html: reading heatmap, with day and month components.
-- shared/styles.css: formatted stylesheet shared by all pages. Search by class name or section comment.
+- shared/styles.css: formatted stylesheet shared by all pages. Search by class name or section comment. Colours are `--hex-*` tokens defined at the top, with dark values under `[data-theme="dark"]`.
+- shared/app.js: loaded on every page by `web.py`; applies the theme and registers the service worker.
+- shared/sw.js: service worker for offline reading.
+- shared/save.html, shared/save.js: the public `/save` page used by the bookmarklet and share menus.
 
 Python modules prepare data and pass escaped values into ${placeholder} slots. templates.py loads those files using Python's string.Template; it does not run JavaScript or evaluate template expressions. HTML fragments must be produced by our own components or the existing notes sanitizer. Escape any new user text before inserting it. Workspace files use trusted include comments assembled by the server.
 

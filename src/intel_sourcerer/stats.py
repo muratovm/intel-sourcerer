@@ -91,12 +91,16 @@ def render_stats_data(data, now=None):
     return render_template(
         "stats/index.html",
         today_year=today.year,
-        total=total,
-        active_days=len(counts),
+        total_label=f"{total} article{'' if total == 1 else 's'} read",
+        active_days_label=f"{len(counts)} active day{'' if len(counts) == 1 else 's'}",
         month_labels="".join(month_cells),
         today_year2=today.year,
         day_cells="".join(cells),
-        undated=undated,
+        undated_label=(
+            "1 previously read article has no recorded read date and is"
+            if undated == 1
+            else f"{undated} previously read articles have no recorded read date and are"
+        ),
         timed_sessions=render_session_stats_data(
             data["timing"]["sessions"], data["timing"]["abandoned"]
         ),

@@ -38,14 +38,13 @@ def render_sources_list(sources, csrf_token="", config_label="Your source settin
                     status_class=status.lower(),
                     status=status,
                     source_links=" · ".join(links),
-                    source_parent_url=escape(source.parent_url),
-                    source_notes=escape(source.notes),
+                    source_notes=escape(source.notes, quote=True),
                 )
             )
         sections.append(
             render_template(
                 "sources/group.html",
-                kind=escape(kind),
+                kind=escape(kind.replace("_", " ").capitalize().replace("Ai ", "AI ")),
                 source_rows="".join(cards),
             )
         )

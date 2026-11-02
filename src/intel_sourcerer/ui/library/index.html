@@ -28,19 +28,19 @@
           class="lib-drop"
           aria-label="Add article links"
         >
-          <span>Drop links or media files here</span>
           <form id="library-add-form">
             <label class="sr-only" for="library-url">Article URL</label
             ><input
               id="library-url"
               type="text"
-              placeholder="URL or local file path"
+              placeholder="Paste a URL or file path, or drop files here"
               required
             /><button id="library-add" type="submit">Add article</button>
           </form>
         </section>
       </div>
       <p id="library-feedback" role="status" hidden></p>
+      <div class="lib-toolbar">
       <form action="/library" class="lib-search">
         <label class="sr-only" for="query">Search articles and notes</label
         ><input
@@ -53,7 +53,7 @@
           type="hidden"
           name="notes"
           value="${notes_filter}"
-        /><button type="submit">Search</button>
+        /><button class="sr-only" type="submit">Search</button>
       </form>
       <nav class="lib-tabs" aria-label="Library filters">
         <a class="${all_tab_class}" href="${all_link}"
@@ -62,6 +62,7 @@
           >With notes</a
         ><span>${article_count} articles</span>
       </nav>
+      </div>
       <div class="lib-workspace">
         <section class="lib-list" aria-label="Saved articles">
           ${article_rows}

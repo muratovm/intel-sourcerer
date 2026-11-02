@@ -144,3 +144,48 @@ def test_remove_link_window_notice():
     assert 'opens in a new window' not in html
     assert 'href="https://example.com"' in html
     assert '>Report</a>' in html
+
+
+def test_google_docs_bullets_with_zero_width_space_and_sub_bullets():
+    from bs4 import BeautifulSoup
+    html = page_html('●\u200b Parent rule\n○\u200b Child detail\nwraps here\n●\u200b Next rule')
+    soup = BeautifulSoup(html, 'html.parser')
+    assert [li.find(string=True, recursive=False).strip() for li in soup.select('ul > li')][:1] == ['Parent rule']
+    assert soup.select_one('ul ul li').get_text() == 'Child detail wraps here'
+    assert '\u200b' not in html and '●' not in html
+    assert '<ol start="10"><li>How to read a research paper quickly</li>' in page_html('10.\u200bHow to read a research paper quickly')
+
+
+def test_glyph_alone_on_its_line_starts_the_next_item():
+    html = page_html('Three parts:\n•\nFirst\n•\nSecond\n\uf0b7 Third')
+    assert '<p>Three parts:</p>' in html
+    assert '<li>First</li><li>Second</li><li>Third</li>' in html
+
+
+def test_wrapped_line_starting_with_dash_is_prose():
+    html = page_html('organized into TTPs\n- Tactics (intentions) and more.')
+    assert '<ul>' not in html
+    assert 'TTPs - Tactics' in html
+    assert '<li>a</li><li>b</li>' in page_html('- a\n- b')
+    assert '<li>a</li>' in page_html('Items:\n- a')
+
+
+def test_short_numbered_run_is_a_list_not_headings():
+    html = page_html('1. Short overview\n2. Longer background\n3. Worked example')
+    assert '<h2>' not in html
+    assert '<li>Short overview</li><li>Longer background</li><li>Worked example</li>' in html
+
+
+def test_printed_url_wrapped_across_lines_links_whole_address():
+    from bs4 import BeautifulSoup
+    cases = {
+        'Cloudflare. https://hub.example.com/how-\ncloudflare-detects-bots': 'https://hub.example.com/how-cloudflare-detects-bots',
+        'Docs. https://doi.org/10.1016/\nj.cose.2024.1': 'https://doi.org/10.1016/j.cose.2024.1',
+        'Guide https://example.com/docs\n/guides/text and more': 'https://example.com/docs/guides/text',
+    }
+    for text, target in cases.items():
+        md, _ = extract_markdown('<article>' + page_html(text) + '</article>', 'https://example.com/a.pdf')
+        assert target in [a['href'] for a in BeautifulSoup(render_markdown(md), 'html.parser').select('a')]
+    # An ordinary word after a complete URL stays a separate word.
+    assert 'https://example.com/ for details' in page_html('See https://example.com/\nfor details')
+    assert 'https://example.com next' in page_html('See https://example.com\nnext time')

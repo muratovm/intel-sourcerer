@@ -8,8 +8,26 @@ from urllib.parse import unquote, urlsplit
 from pypdf import PdfReader
 from .content import extract_markdown
 
+BULLET_GLYPHS = "•●▪◦‣⁃○■□◆◇➢➤▶►✓✔∙·\uf0b7\uf0a7\uf0d8\uf0fc\uf076\uf0a8"
+SUB_BULLET_GLYPHS = "○◦□◇\uf0a8"
+BULLET_LINE = re.compile(rf"^([{BULLET_GLYPHS}])\s*(.+)$")
+DASH_LINE = re.compile(r"^([-*–—])\s+(.+)$")
+LONE_BULLETS = re.compile(rf"^[{BULLET_GLYPHS}](?:\s+[{BULLET_GLYPHS}])*$")
+# Google Docs exports put a zero-width space between the glyph and the text.
+INVISIBLE = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad]")
+# pdf_layout wraps annotated link text in these so it survives HTML escaping.
+LINK_OPEN, LINK_SEP, LINK_CLOSE = "\ue000", "\ue001", "\ue002"
+# Marks a line set in a monospace font, so it stays verbatim in a code block.
+CODE_LINE = "\ue003"
+
 
 def extract_pdf(data, url):
+    title, content, html = extract_pdf_html(data, url)
+    markdown, _ = extract_markdown(html, url)
+    return title, content, markdown
+
+
+def extract_pdf_html(data, url):
     try:
         reader = PdfReader(BytesIO(data))
         if reader.is_encrypted and not reader.decrypt(""):
@@ -27,8 +45,7 @@ def extract_pdf(data, url):
         raise ValueError("No selectable text found in this PDF. Scanned PDFs need OCR before import.")
     title = title or unquote(urlsplit(url).path.rsplit("/", 1)[-1]).removesuffix(".pdf") or "PDF document"
     html = "<article>" + "".join(page_html(page) for page in pages) + "</article>"
-    markdown, _ = extract_markdown(html, url)
-    return title, content, markdown
+    return title, content, html
 
 
 def page_html(text):
@@ -39,28 +56,49 @@ def page_html(text):
     list_kind = None
     list_start = 1
     in_references = False
+    pending_bullets = 0
+    code = []
 
     def flush_paragraph():
         if paragraph:
             blocks.append("<p>" + escape(" ".join(paragraph)) + "</p>")
             paragraph.clear()
 
+    def flush_code():
+        if code:
+            blocks.append("<pre><code>" + escape("\n".join(code)) + "</code></pre>")
+            code.clear()
+
     def flush_list():
         nonlocal list_kind
         if items:
             start = f' start="{list_start}"' if list_kind == "ol" else ""
-            blocks.append(f"<{list_kind}{start}>" + "".join("<li>" + escape(item) + "</li>" for item in items) + f"</{list_kind}>")
+            blocks.append(f"<{list_kind}{start}>" + "".join(list_item_html(*item) for item in items) + f"</{list_kind}>")
             items.clear()
         list_kind = None
 
     text = normalize_section_heading(text)
     text = re.sub(r"^Abstract\s*[—–:\-]\s*", "Abstract\n", text, flags=re.I)
-    for raw in text.splitlines():
-        line = raw.strip()
+    lines = rejoin_wrapped_urls([clean_line(raw) for raw in text.splitlines()])
+    for index, line in enumerate(lines):
+        if line.startswith(CODE_LINE):
+            flush_paragraph()
+            flush_list()
+            code.append(line[1:])
+            continue
+        flush_code()
         if not line:
             flush_paragraph()
             flush_list()
             continue
+        # A glyph may be extracted on its own line, ahead of the item's text.
+        if LONE_BULLETS.fullmatch(line):
+            flush_paragraph()
+            pending_bullets += len(line.split())
+            continue
+        if pending_bullets and not BULLET_LINE.match(line):
+            pending_bullets -= 1
+            line = "• " + line
         ieee_heading = re.match(r"^([IVXLCDM]+)\.\s+([A-Z][A-Z0-9 ,&’'()/-]+)$", line)
         letter_heading = is_lettered_heading(line)
         if ieee_heading or (letter_heading and len(line.split()) <= 14):
@@ -89,10 +127,17 @@ def page_html(text):
             level = min(3, len(re.match(r"[\d.]+", line)[0].rstrip(".").split(".")) + 1)
             blocks.append(f"<h{level}>" + escape(line) + f"</h{level}>")
             continue
-        bullet = re.match(r"^[•●▪◦‣⁃*-]\s+(.+)$", line)
+        following = next((other for other in lines[index + 1:] if other), "")
+        bullet = BULLET_LINE.match(line)
+        if not bullet:
+            dash = DASH_LINE.match(line)
+            # A wrapped sentence can start a line with a dash; a list has neighbours.
+            if dash and (list_kind == "ul" or DASH_LINE.match(following) or (paragraph and paragraph[-1].endswith(":"))):
+                bullet = dash
         numbered = re.match(r"^(\d+)[.)]?\s+(.+)$", line)
+        continues_list = numbered and re.match(rf"^{int(numbered[1]) + 1}[.)]\s", following)
         # Bare numeric quantities are prose; headings need a title-like capital.
-        if numbered and numbered[2][0].isupper() and len(numbered[2].split()) <= 5 and not items:
+        if numbered and numbered[2][0].isupper() and len(numbered[2].split()) <= 5 and not items and not continues_list:
             flush_paragraph()
             blocks.append("<h2>" + escape(line) + "</h2>")
             continue
@@ -106,14 +151,58 @@ def page_html(text):
                 flush_list()
                 list_kind = kind
                 list_start = int(numbered[1]) if numbered else 1
-            items.append(bullet[1] if bullet else numbered[2])
+            if bullet and bullet[1] in SUB_BULLET_GLYPHS and items:
+                items[-1][1].append(bullet[2])
+            else:
+                items.append([bullet[2] if bullet else numbered[2], []])
         elif items:
-            items[-1] += " " + line
+            if items[-1][1]:
+                items[-1][1][-1] += " " + line
+            else:
+                items[-1][0] += " " + line
         else:
             paragraph.append(line)
+    flush_code()
     flush_paragraph()
     flush_list()
     return "".join(blocks)
+
+
+def clean_line(raw):
+    # The invisible character may be all that separates a number from its item.
+    return INVISIBLE.sub("", re.sub(r"^(\s*\d+[.)])[\u200b\u2060\ufeff]+", r"\1 ", raw)).strip()
+
+
+def list_item_html(text, children):
+    nested = "<ul>" + "".join("<li>" + escape(child) + "</li>" for child in children) + "</ul>" if children else ""
+    return "<li>" + escape(text) + nested + "</li>"
+
+
+def rejoin_wrapped_urls(lines):
+    """Undo line wrapping inside a printed URL so the whole address gets linked."""
+    result = []
+    for line in lines:
+        if result and url_continues(result[-1], line):
+            first, _, rest = line.partition(" ")
+            result[-1] += first
+            if rest.strip():
+                result.append(rest.strip())
+        else:
+            result.append(line)
+    return result
+
+
+def url_continues(previous, line):
+    if not previous or not line or LINK_OPEN in previous or LINK_OPEN in line or CODE_LINE in previous or CODE_LINE in line:
+        return False
+    tail, head = previous.split()[-1], line.split()[0]
+    if not re.match(r"^\(?https?://", tail, re.I):
+        return False
+    if tail.endswith("-") or (len(head) > 1 and head[0] in "/-_?#=&%~"):
+        return True
+    # After a path separator an ordinary next word could follow, so the next
+    # token has to look like the rest of a path rather than a word.
+    return tail[-1] in "/_=&?#%~" and (head[0].islower() or head[0].isdigit()) and bool(re.search(r"[-_/.=&%]", head.rstrip(".,;:)")))
 
 
 def strip_page_furniture(pages):

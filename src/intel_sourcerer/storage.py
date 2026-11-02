@@ -30,6 +30,8 @@ def connect_database(path):
         db.execute("ALTER TABLE articles ADD COLUMN content_format TEXT NOT NULL DEFAULT 'article'")
     if 'content_markdown' not in columns:
         db.execute('ALTER TABLE articles ADD COLUMN content_markdown TEXT')
+    if 'content_html' not in columns:
+        db.execute('ALTER TABLE articles ADD COLUMN content_html TEXT')
     if 'media_json' not in columns:
         db.execute("ALTER TABLE articles ADD COLUMN media_json TEXT NOT NULL DEFAULT '[]'")
     if 'is_read' not in columns:
@@ -62,6 +64,18 @@ def connect_database(path):
       started_at TEXT NOT NULL, resumed_at TEXT, finished_at TEXT,
       status TEXT NOT NULL CHECK(status IN ('running','paused','completed','abandoned'))
     );""")
+    if 'triage' not in columns:
+        db.execute("ALTER TABLE articles ADD COLUMN triage TEXT CHECK (triage IN ('keep','skip'))")
+    db.executescript("""CREATE TABLE IF NOT EXISTS article_highlights (
+      id TEXT PRIMARY KEY, article_url TEXT NOT NULL REFERENCES articles(url),
+      quote TEXT NOT NULL, prefix TEXT NOT NULL DEFAULT '', suffix TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS article_highlights_article ON article_highlights(article_url);
+    CREATE TABLE IF NOT EXISTS reading_positions (
+      article_url TEXT PRIMARY KEY REFERENCES articles(url),
+      fraction REAL NOT NULL, updated_at TEXT NOT NULL
+    );""")
     db.commit()
     return db
 
@@ -72,17 +86,20 @@ def save_source(db, source):
       (source.id, source.name, source.source_type, source.parent_url, source.enabled))
 
 
-def save_article(db, source_id, article, *, content, error, reason, discovered_at, markdown=None, media=None):
-    existing = db.execute("SELECT 1 FROM articles WHERE url=?", (article.url,)).fetchone()
+def save_article(db, source_id, article, *, content, error, reason, discovered_at, markdown=None, media=None, html=None):
+    from .boilerplate import title_without_category
+
+    existing = db.execute("SELECT content_html FROM articles WHERE url=?", (article.url,)).fetchone()
+    title = title_without_category(article.title, html or (existing[0] if existing else None))
     db.execute('''INSERT INTO articles (url,source_id,title,published_at,author,summary_html,content_text,content_status,fetch_error,relevance_reason,discovered_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(url) DO UPDATE SET title=excluded.title,published_at=excluded.published_at,
       author=excluded.author,summary_html=excluded.summary_html,
       content_text=COALESCE(excluded.content_text, articles.content_text),
       content_status=CASE WHEN excluded.content_text IS NOT NULL THEN 'full_text' ELSE articles.content_status END,
       fetch_error=excluded.fetch_error,relevance_reason=excluded.relevance_reason''',
-      (article.url, source_id, article.title, article.published_at.isoformat(), article.author,
+      (article.url, source_id, title, article.published_at.isoformat(), article.author,
        article.summary_html, content, 'full_text' if content else 'metadata_only', error, reason, discovered_at))
     if markdown:
         import json
-        db.execute('UPDATE articles SET content_markdown=?,media_json=? WHERE url=?', (markdown,json.dumps(media or []),article.url))
+        db.execute('UPDATE articles SET content_markdown=?,content_html=?,media_json=? WHERE url=?', (markdown,html,json.dumps(media or []),article.url))
     return not bool(existing)

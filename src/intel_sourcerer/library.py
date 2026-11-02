@@ -1,5 +1,9 @@
 """Searchable local article and notes library."""
 
+import json
+from datetime import datetime
+
+from .content import format_label, render_markdown
 from .templates import render_template
 from html import escape
 from urllib.parse import urlencode
@@ -8,12 +12,33 @@ from markdownify import markdownify
 from .sessions import has_notes
 
 
+def short_date(value):
+    try:
+        date = datetime.fromisoformat(value[:10])
+    except (TypeError, ValueError):
+        return value or ""
+    return f"{date:%b} {date.day}, {date.year}"
+
+
+def _checklist_text(html):
+    """Markdown has no tick boxes of its own, so items export in the usual [ ] and [x] form."""
+    soup = BeautifulSoup(html, "html.parser")
+    for item in soup.select("ul.checklist > li"):
+        item.insert(0, "[x] " if item.get("data-checked") == "true" else "[ ] ")
+    return str(soup)
+
+
 def export_article(db, url):
     row = db.execute("SELECT * FROM articles WHERE url=?", (url,)).fetchone()
     if row is None:
         return None
-    notes = markdownify(row["notes"]) if row["notes_format"] == "html" else row["notes"]
-    return f"# {row['title']}\n\nSource: {url}\n\nPublished: {row['published_at']}\n\n## Notes\n\n{notes}\n\n## Article\n\n{row['content_markdown'] or row['content_text'] or ''}\n"
+    notes = markdownify(_checklist_text(row["notes"])) if row["notes_format"] == "html" else row["notes"]
+    quotes = [item["quote"] for item in db.execute("SELECT quote FROM article_highlights WHERE article_url=? ORDER BY created_at,id", (url,))]
+    highlights = "## Highlights\n\n" + "\n\n".join("> " + quote.replace("\n", "\n> ") for quote in quotes) + "\n\n" if quotes else ""
+    from .iocs import extract_iocs, iocs_markdown
+
+    indicators = iocs_markdown(extract_iocs(row["content_html"] or render_markdown(row["content_markdown"] or "")))
+    return f"# {row['title']}\n\nSource: {url}\n\nPublished: {row['published_at']}\n\n## Notes\n\n{notes}\n\n{highlights}{indicators}## Article\n\n{row['content_markdown'] or row['content_text'] or ''}\n"
 
 
 def render_library(db, query="", notes_only=False, selected="", csrf_token=""):
@@ -26,7 +51,7 @@ def library_rows(db):
     return [
         dict(row)
         for row in db.execute(
-            "SELECT a.*,s.name AS publisher FROM articles a JOIN sources s ON s.id=a.source_id ORDER BY julianday(a.published_at) DESC,a.title COLLATE NOCASE,a.url"
+            "SELECT a.*,s.name AS publisher,(SELECT json_group_array(h.quote) FROM (SELECT quote FROM article_highlights WHERE article_url=a.url ORDER BY created_at,id) h) AS highlights_json FROM articles a JOIN sources s ON s.id=a.source_id ORDER BY julianday(a.published_at) DESC,a.title COLLATE NOCASE,a.url"
         )
     ]
 
@@ -43,12 +68,13 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             if row["notes_format"] == "html"
             else row["notes"]
         )
-        if notes_only and not has_notes(row["notes"], row["notes_format"]):
+        quotes = json.loads(row.get("highlights_json") or "[]")
+        if notes_only and not has_notes(row["notes"], row["notes_format"]) and not quotes:
             continue
         if all(
             term
             in " ".join(
-                [row["title"], row["publisher"], row["content_text"] or "", notes]
+                [row["title"], row["publisher"], row["content_text"] or "", notes, *quotes]
             ).casefold()
             for term in terms
         ):
@@ -84,11 +110,9 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
                 current_attribute="aria-current=true" if is_active else "",
                 publisher=escape(row["publisher"]),
                 title=escape(row["title"]),
-                published_date=escape(
-                    row["published_at"][:10]
-                    + " · "
-                    + row["content_format"].capitalize()
-                ),
+                format_label=(label := format_label(row["content_format"], row["publisher"])),
+                format_class=label.lower(),
+                published_date=escape(short_date(row["published_at"])),
                 badges=badges,
             )
         )
@@ -99,8 +123,13 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             if active["notes_format"] == "html"
             else "<p>" + escape(active["notes"]).replace("\n", "<br>") + "</p>"
         )
+        quotes = json.loads(active.get("highlights_json") or "[]")
         if not has_notes(active["notes"], active["notes_format"]):
-            notes = render_template("library/no-notes.html")
+            notes = "" if quotes else render_template("library/no-notes.html")
+        if quotes:
+            notes += '<h3 class="lib-highlights-heading">Highlights</h3>' + "".join(
+                f'<blockquote class="lib-highlight">{escape(quote)}</blockquote>' for quote in quotes
+            )
         opened = escape("/?" + urlencode({"open": active["url"]}), quote=True)
         exported = escape("/export?" + urlencode({"url": active["url"]}), quote=True)
         edited = (
@@ -113,7 +142,9 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             edited=edited,
             title=escape(active["title"]),
             publisher=escape(active["publisher"]),
-            published_date=escape(active["published_at"][:10]),
+            format_label=(active_label := format_label(active["content_format"], active["publisher"])),
+            format_class=active_label.lower(),
+            published_date=escape(short_date(active["published_at"])),
             opened=opened,
             exported=exported,
             url=escape(active["url"], quote=True),

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="csrf-token" content="__TOKEN__" />
+    <title>Save article · Intel Sourcerer</title>
+    <link rel="stylesheet" href="/reader.css" />
+    <script src="/save.js" defer></script>
+  </head>
+  <body class="save-page">
+    <main class="save-card">
+      <div class="brand"><img class="brand-icon" src="/brand-icon.png" alt="" />Intel Sourcerer</div>
+      <section id="save-confirm" hidden>
+        <h1>Save this article?</h1>
+        <p id="save-title" class="save-title"></p>
+        <p id="save-url" class="muted save-url"></p>
+        <button id="save-button" class="primary" type="button">Save to library</button>
+      </section>
+      <section id="save-working" role="status" hidden>
+        <h1>Saving…</h1>
+        <p class="muted">Fetching and parsing the article. Long PDFs can take a moment.</p>
+      </section>
+      <section id="save-done" hidden>
+        <h1>Saved</h1>
+        <p id="save-done-title" class="save-title"></p>
+        <p class="muted">It's on your Home page under Kept to read.</p>
+        <div class="save-actions">
+          <a id="save-read" class="lib-open" href="/">Read now</a>
+          <button id="save-close" type="button">Done</button>
+        </div>
+      </section>
+      <section id="save-signin" hidden>
+        <h1>Sign in to save</h1>
+        <p class="muted">We'll keep this link and bring you back here.</p>
+        <a class="lib-open" href="/login">Sign in</a>
+      </section>
+      <p id="save-error" role="alert" hidden></p>
+      <section id="save-setup" hidden>
+        <h1>Save from anywhere</h1>
+        <h2>On a computer</h2>
+        <p>Drag this button to your bookmarks bar. Click it on any article to save that page.</p>
+        <p><a id="bookmarklet" class="bookmarklet" href="/save">Save to Sourcerer</a></p>
+        <h2>On Android</h2>
+        <p>Open this site in Chrome and choose Install app. Sourcerer then appears in the Share menu.</p>
+        <h2>On iPhone or iPad</h2>
+        <p>Safari can't add web apps to the Share menu, so use a Shortcut:</p>
+        <ol>
+          <li>In Shortcuts, create a shortcut and turn on Show in Share Sheet.</li>
+          <li>Add URL Encode for the Shortcut Input.</li>
+          <li>Add Open URLs with <code id="shortcut-url"></code> followed by the encoded text.</li>
+        </ol>
+        <p><a href="/">Back to Intel Sourcerer</a></p>
+      </section>
+    </main>
+  </body>
+</html>

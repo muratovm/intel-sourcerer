@@ -11,40 +11,44 @@
         </button>
       </div>
     </div>
+    <div class="focus-session" aria-label="Timed reading">
+      <div id="focus-status" class="focus-clock" hidden>
+        <strong id="focus-clock"></strong><span id="focus-caption"></span>
+      </div>
+      <div id="focus-target" class="focus-target">
+        <label for="focus-minutes">Target</label
+        ><input
+          id="focus-minutes"
+          type="number"
+          min="0.5"
+          max="240"
+          step="0.5"
+          value="4"
+          aria-label="Target minutes"
+        /><span>min</span>
+      </div>
+      <div class="focus-controls">
+        <button id="focus-start">Start timer</button
+        ><button id="focus-pause" hidden>Pause</button
+        ><button id="focus-finish" class="primary" hidden>
+          Finish reading &amp; notes</button
+        ><button id="focus-end" hidden>End attempt</button>
+      </div>
+    </div>
+    <progress
+      id="focus-progress"
+      max="1"
+      value="0"
+      aria-label="Time elapsed"
+      hidden
+    ></progress>
   </header>
-  <div class="focus-session" aria-label="Timed reading and notes">
-    <div class="focus-target">
-      <label for="focus-minutes">Target</label
-      ><input
-        id="focus-minutes"
-        type="number"
-        min="0.5"
-        max="240"
-        step="0.5"
-        value="4"
-        aria-label="Target minutes"
-      /><span>min</span>
-    </div>
-    <div class="focus-clock">
-      <strong id="focus-clock">Ready</strong
-      ><span id="focus-caption">Start when you’re ready</span
-      ><progress
-        id="focus-progress"
-        max="1"
-        value="0"
-        aria-label="Time elapsed"
-      ></progress>
-    </div>
-    <div class="focus-controls">
-      <button id="focus-start">Start timer</button
-      ><button id="focus-pause" hidden>Pause</button
-      ><button id="focus-finish" class="primary" hidden>
-        Finish reading &amp; notes</button
-      ><button id="focus-end" hidden>End attempt</button>
-    </div>
-  </div>
   <div id="focus-message" role="status" hidden></div>
-  <div class="workspace">
+  <div class="reader-tabs" role="tablist" aria-label="Reader view">
+    <button id="tab-read" type="button" role="tab" aria-selected="true" data-view="read">Read</button
+    ><button id="tab-notes" type="button" role="tab" aria-selected="false" data-view="notes">Notes</button>
+  </div>
+  <div class="workspace" id="workspace" data-phone-view="read">
     <article
       id="article-pane"
       class="article-pane"
@@ -53,7 +57,10 @@
     >
       <p class="eyebrow">SECURITY RESEARCH</p>
       <h1 id="article-title"></h1>
-      <p id="article-meta" class="muted"></p>
+      <div class="article-meta-row">
+        <span id="article-format"></span>
+        <p id="article-meta" class="muted"></p>
+      </div>
       <a id="original" target="_blank" rel="noopener noreferrer"
         >Read original article</a
       >
@@ -61,6 +68,17 @@
         <label
           ><input id="load-media" type="checkbox" /> Load article media</label
         ><span class="muted">Loads images and videos from external sites.</span>
+      </div>
+      <div class="reader-prefs">
+        <span class="muted">Text</span>
+        <button id="text-smaller" type="button" aria-label="Smaller text">A−</button
+        ><button id="text-larger" type="button" aria-label="Larger text">A+</button>
+        <label class="muted" for="theme-select">Theme</label>
+        <select id="theme-select">
+          <option value="auto">Auto</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
       </div>
       <hr />
       <div id="article-body" class="markdown"></div>
@@ -85,39 +103,53 @@
         >
       </div>
       <label class="sr-only" for="notes">Your notes for this article</label>
-      <div class="notes-toolbar" role="toolbar" aria-label="Note formatting">
-        <button
-          type="button"
-          data-format="bold"
-          aria-label="Bold"
-          title="Bold (⌘B / Ctrl+B)"
-        >
-          Bold</button
-        ><button type="button" data-format="highlight" aria-label="Highlight">
-          Highlight</button
-        ><button type="button" data-format="callout" aria-label="Callout">
-          Callout
-        </button>
+      <div class="notes-editor">
+        <div class="notes-toolbar" role="toolbar" aria-label="Note formatting">
+          <button type="button" data-format="bold" aria-label="Bold" title="Bold (⌘B / Ctrl+B)"><b aria-hidden="true">B</b></button
+          ><button type="button" data-format="highlight" aria-label="Highlight" title="Highlight selected text"><span class="tool-highlight" aria-hidden="true">A</span></button
+          ><span class="toolbar-gap" aria-hidden="true"></span
+          ><button type="button" data-format="callout" aria-label="Callout" title="Turn this line into a callout">
+            <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true"><path d="M3 3v12" stroke-width="2.5" /><path d="M8 5h8M8 9h8M8 13h5" /></svg></button
+          ><button type="button" data-format="list" aria-label="Bulleted list" title="Bulleted list">
+            <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true"><path d="M3.5 4.5h.01M3.5 9h.01M3.5 13.5h.01" stroke-width="3" /><path d="M7.5 4.5H16M7.5 9H16M7.5 13.5H16" /></svg></button
+          ><button type="button" data-format="checklist" aria-label="Checklist" title="Checklist">
+            <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true"><rect x="2.5" y="2.5" width="13" height="13" rx="2.5" /><path d="M5.8 9.2l2.3 2.3 4.2-4.8" /></svg>
+          </button>
+        </div>
+        <div
+          id="notes"
+          contenteditable="true"
+          role="textbox"
+          aria-multiline="true"
+          aria-label="Your notes for this article"
+          data-placeholder="What stands out? Jot down a takeaway, question, or follow-up…"
+        ></div>
       </div>
-      <div
-        id="notes"
-        contenteditable="true"
-        role="textbox"
-        aria-multiline="true"
-        aria-label="Your notes for this article"
-        data-placeholder="What stands out? Jot down a takeaway, question, or follow-up…"
-      ></div>
       <div class="note-tools">
-        <button id="quote-selection" type="button">
-          Add selected passage to notes</button
-        ><button data-action="unread" id="mark-unread" type="button">
+        <button data-action="unread" id="mark-unread" type="button">
           Mark unread
         </button>
       </div>
+      <details id="highlights-panel" class="highlights-panel" hidden>
+        <summary>Highlights <span id="highlights-count" class="muted"></span></summary>
+        <ol id="highlights-list"></ol>
+      </details>
+      <details id="iocs-panel" class="iocs-panel" hidden>
+        <summary>IOCs <span id="iocs-count" class="muted"></span></summary>
+        <div id="iocs-groups"></div>
+        <p class="muted iocs-hint">Found by pattern in the text, so check each one in context. Select a value to find it in the article.</p>
+      </details>
       <p class="note-hint muted">
         Select text in the article to quote it. Notes stay with this article.
+        Cmd- or Ctrl-click a link in your notes to open it.
       </p>
     </aside>
+  </div>
+  <div id="selection-actions" class="selection-actions" hidden>
+    <button id="highlight-selection" type="button">Highlight</button
+    ><button id="quote-selection" type="button" disabled>
+      Add selected passage to notes</button
+    ><button id="remove-highlight" type="button" hidden>Remove highlight</button>
   </div>
   <footer class="nav-bar bottom">
     <button data-action="previous">Previous</button>

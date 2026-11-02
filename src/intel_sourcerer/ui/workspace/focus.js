@@ -25,8 +25,12 @@
     if (!article) return;
     const active = !terminal(),
       same = active && session.article_url === article.url;
+    const timed = !["audio", "video"].includes(article.content_format);
     element("focus-minutes").disabled = busy || active;
-    element("focus-start").hidden = active;
+    element("focus-target").hidden = active || !timed;
+    element("focus-status").hidden = !active && timed;
+    element("focus-progress").hidden = !same;
+    element("focus-start").hidden = active || !timed;
     element("focus-pause").hidden = !same;
     element("focus-finish").hidden = !same;
     element("focus-end").hidden = !active;
@@ -47,10 +51,10 @@
       element("focus-clock").classList.toggle("overtime", remaining < 0);
       element("focus-caption").textContent =
         session.status === "paused"
-          ? "Paused · active time only"
+          ? "paused"
           : remaining < 0
-            ? "Overtime · keep going"
-            : "remaining";
+            ? "over target"
+            : `left of ${session.target_seconds / 60} min`;
       element("focus-progress").max = session.target_seconds;
       element("focus-progress").value = Math.min(
         elapsed(),
@@ -59,17 +63,12 @@
     } else {
       element("focus-clock").textContent = active
         ? "Timer paused elsewhere"
-        : "Ready";
+        : "";
       element("focus-caption").textContent = active
         ? "End that attempt to time this article"
-        : "Start when you’re ready";
+        : "Use the playback controls below";
       element("focus-clock").classList.remove("overtime");
       element("focus-progress").value = 0;
-      if (!active && ["audio", "video"].includes(article.content_format)) {
-        element("focus-start").disabled = true;
-        element("focus-minutes").disabled = true;
-        element("focus-caption").textContent = "Use the playback controls below";
-      }
     }
   }
   function message(text) {

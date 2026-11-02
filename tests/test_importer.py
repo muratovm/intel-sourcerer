@@ -1,8 +1,9 @@
 from dataclasses import replace
+from pathlib import Path
 from datetime import datetime, timezone
 from intel_sourcerer.config import PublisherSource
 from intel_sourcerer.feeds import Article
-from intel_sourcerer.importer import listing_articles, relevance_reason, in_window
+from intel_sourcerer.importer import listing_articles, relevance_reason, selection_reason, in_window
 from intel_sourcerer.storage import connect_database, save_article, save_source
 
 SOURCE=PublisherSource('anthropic','Anthropic','https://www.anthropic.com/threat-intelligence','ai_lab')
@@ -76,3 +77,35 @@ def test_import_attempts_every_enabled_source_type(tmp_path,monkeypatch):
     assert calls==['Vendor']
     assert [s['id'] for s in report['sources']]==['vendor','unsupported']
     assert any('unsupported: no listing adapter' in error for error in report['errors'])
+
+
+def test_real_listing_markup_pairs_dates_with_title_links():
+    html=(Path(__file__).parent/'fixtures'/'anthropic_listing.html').read_text()
+    articles={a.url.replace('https://www.anthropic.com',''):a for a in listing_articles(html,SOURCE,SOURCE.parent_url)}
+    assert len(articles)==8
+    assert not any(url in articles for url in ['/news/security','/news/announcements','/news/partnerships'])
+    assert all(a.title and a.published_at for a in articles.values())
+    assert '/threat-intelligence-report-september-2026' in articles
+    assert '/news/ai-for-science-expands-foundations-research-institutions' in articles
+    row=articles['/news/ai-for-science-expands-foundations-research-institutions']
+    assert row.title=='AI for Science expands to foundations and research institutions'
+    assert row.published_at==datetime(2026,10,28,4,tzinfo=timezone.utc)
+
+
+def test_date_beside_a_list_of_titles_is_not_guessed():
+    html='<section><time>Oct 1, 2026</time><div><a href="/news/one"><h3>One</h3></a></div><div><a href="/news/two"><h3>Two</h3></a></div></section>'
+    assert listing_articles(html,SOURCE,SOURCE.parent_url)==[]
+
+
+def test_repeated_article_keeps_the_copy_with_a_summary():
+    html='<div><time>Oct 1, 2026</time><a href="/news/one"><h3>One</h3></a></div><div><time>Oct 1, 2026</time><a href="/news/one"><h3>One</h3></a><p>Summary</p></div>'
+    articles=listing_articles(html,SOURCE,SOURCE.parent_url)
+    assert len(articles)==1 and 'Summary' in articles[0].summary_html
+
+
+def test_frontier_red_team_skips_keyword_filter():
+    team=PublisherSource('anthropic-frontier-red-team','Anthropic Frontier Red Team','https://www.anthropic.com/research/team/frontier-red-team','ai_lab')
+    a=Article('Anthropic','Claude reveals ECDSA curve origins','https://example.com/a','a',None,None,None,'')
+    assert selection_reason(a,team)
+    assert selection_reason(a,SOURCE) is None
+    assert selection_reason(replace(a,title='Cyber report'),SOURCE)
