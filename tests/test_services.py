@@ -37,7 +37,8 @@ def token(response):
     return re.search(r'name="csrf_token" value="([^"]+)"', response.text)[1]
 
 
-def test_separate_viewer_backend_workflow(tmp_path):
+def test_separate_viewer_backend_workflow(tmp_path, monkeypatch):
+    monkeypatch.setenv("INTEL_SETUP_TOKEN", "test-first-account-code")
     database = tmp_path / "private/articles.sqlite3"
     config = tmp_path / "sources.toml"
     config.write_text(CONFIG)
@@ -71,6 +72,7 @@ def test_separate_viewer_backend_workflow(tmp_path):
                     "username": "owner",
                     "password": "a-long-test-password",
                     "csrf_token": csrf,
+                    "setup_code": "test-first-account-code",
                 },
             )
             assert response.status_code == 303

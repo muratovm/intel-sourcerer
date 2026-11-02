@@ -244,9 +244,10 @@ def login(client, csrf, password='wrong-password-here', **headers):
 
 def test_one_attacker_behind_the_proxy_cannot_lock_out_the_owner(run_server, monkeypatch):
     monkeypatch.setenv('INTEL_TRUSTED_PROXIES', '127.0.0.1/32')
+    monkeypatch.setenv('INTEL_SETUP_TOKEN', 'test-code')
     client, _ = run_server()
     csrf, _ = setup_token(client)
-    client.post('/auth/setup', data={**ACCOUNT, 'csrf_token': csrf})
+    assert client.post('/auth/setup', data={**ACCOUNT, 'csrf_token': csrf, 'setup_code': 'test-code'}).status_code == 303
     client.cookies.clear()
     csrf = client.get('/login').text.split('name="csrf_token" value="')[1].split('"')[0]
     for _ in range(5):
@@ -428,3 +429,85 @@ def test_concurrent_uploads_are_refused_not_buffered(run_server, monkeypatch):
     for sender in senders:
         sender.join()
     assert response.status_code == 429 and 'upload' in response.json()['error']
+
+
+def test_localhost_behind_a_trusted_proxy_needs_the_setup_code(run_server, monkeypatch, capsys):
+    monkeypatch.setenv('INTEL_TRUSTED_PROXIES', '127.0.0.1/32')
+    client, _ = run_server()
+    code = capsys.readouterr().out.split('administrator: ')[1].split()[0]
+    csrf, page = setup_token(client)
+    assert 'name="setup_code"' in page
+    visitor = {'X-Forwarded-For': '198.51.100.9', 'X-Forwarded-Proto': 'https'}
+    assert client.post('/auth/setup', data={**ACCOUNT, 'csrf_token': csrf}, headers=visitor).status_code == 400
+    assert client.get('/api/viewer-session').json()['setup_required']
+    assert client.post('/auth/setup', data={**ACCOUNT, 'csrf_token': csrf, 'setup_code': code}, headers=visitor).status_code == 303
+
+
+KEY = 'viewer-test-service-key-' + 'x' * 32
+
+
+@pytest.fixture
+def viewer_and_backend(tmp_path, monkeypatch):
+    from intel_sourcerer.viewer import create_viewer
+    for name in ('INTEL_TRUSTED_PROXIES', 'INTEL_SECURE_COOKIES', 'INTEL_GUEST'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('INTEL_SETUP_TOKEN', 'test-code')
+    backend = create_server(tmp_path / 'lib.sqlite3', 0, tmp_path / 'none.toml', api_only=True, service_key=KEY)
+    monkeypatch.delenv('INTEL_SETUP_TOKEN')
+    viewer = create_viewer(f'http://127.0.0.1:{backend.server_port}', KEY, 0)
+    for server in (backend, viewer):
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield viewer, backend
+    for server in (viewer, backend):
+        server.shutdown()
+        server.server_close()
+
+
+def slow_upload(port):
+    connection = socket.create_connection(('127.0.0.1', port), timeout=5)
+    connection.sendall(b'POST /api/file-upload HTTP/1.1\r\nHost: x\r\nContent-Type: application/octet-stream\r\nContent-Length: 100000\r\n\r\nx')
+    return connection
+
+
+def test_strangers_cannot_hold_the_viewers_upload_slots(viewer_and_backend):
+    viewer, _ = viewer_and_backend
+    address = f'http://127.0.0.1:{viewer.server_port}'
+    held = []
+    try:
+        for _ in range(4):
+            held.append(slow_upload(viewer.server_port))
+        # Each is turned away without its body being read, so all slots stay free.
+        for connection in held:
+            connection.settimeout(5)
+            assert b'401' in connection.recv(200)
+        with httpx.Client(base_url=address, trust_env=False) as owner:
+            page = owner.get('/setup')
+            csrf = page.text.split('name="csrf_token" value="')[1].split('"')[0]
+            assert owner.post('/auth/setup', data={**ACCOUNT, 'csrf_token': csrf, 'setup_code': 'test-code'}).status_code == 303
+            token = owner.get('/api/viewer-session').json()['csrf_token']
+            response = owner.post('/api/file-upload', content=b'not a real file', headers={'X-CSRF-Token': token, 'X-Filename': 'note.txt', 'Content-Type': 'application/octet-stream'})
+        assert response.status_code not in {401, 429}
+    finally:
+        for connection in held:
+            connection.close()
+
+
+def test_viewer_upload_errors_are_json_the_page_can_read(viewer_and_backend):
+    viewer, _ = viewer_and_backend
+    address = f'http://127.0.0.1:{viewer.server_port}'
+    anonymous = httpx.post(address + '/api/file-upload', content=b'x', headers={'X-Filename': 'a.pdf'}, trust_env=False)
+    assert anonymous.status_code == 401 and anonymous.json()['error'] == 'Please sign in.'
+    oversized = httpx.post(address + '/api/pdf-upload', content=b'', headers={'Content-Length': '0'}, trust_env=False)
+    assert oversized.status_code == 413 and 'Invalid' in oversized.json()['error']
+
+
+def test_viewer_refuses_uploads_when_the_backend_cannot_confirm_sign_in(tmp_path):
+    from intel_sourcerer.viewer import create_viewer
+    viewer = create_viewer('http://127.0.0.1:9', KEY, 0)
+    threading.Thread(target=viewer.serve_forever, daemon=True).start()
+    try:
+        response = httpx.post(f'http://127.0.0.1:{viewer.server_port}/api/file-upload', content=b'x', trust_env=False)
+        assert response.status_code == 502
+    finally:
+        viewer.shutdown()
+        viewer.server_close()

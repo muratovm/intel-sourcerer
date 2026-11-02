@@ -124,7 +124,7 @@ capabilities, and limits memory and processes.
 | Setting | Purpose | Default |
 | --- | --- | --- |
 | `INTEL_TRUSTED_PROXIES` | Comma-separated proxy addresses or networks allowed to report the client through `X-Forwarded-For` and `X-Forwarded-Proto` | None; forwarded headers are ignored |
-| `INTEL_SETUP_TOKEN` | Code required to create the first account | Random and printed to the log, when listening beyond localhost |
+| `INTEL_SETUP_TOKEN` | Code required to create the first account | Random and printed to the log for standalone backends, with a trusted proxy, or when listening beyond localhost |
 | `INTEL_SECURE_COOKIES` | Always mark session cookies Secure and send HSTS | Off, but on for requests a trusted proxy reports as HTTPS |
 | `INTEL_GUEST` | Set to `off` to remove guest reading | On |
 | `INTEL_MAX_CONNECTIONS` | Connections served at once; each direct client gets a quarter | 64 |
@@ -134,6 +134,11 @@ nothing wider.** The address appears at the start of each line in `docker compos
 backend` when a request comes through the proxy. If it's too narrow, every visitor
 shares one address and one attacker can trigger the login limits for everybody. If
 it's too wide, clients can forge their address and avoid those limits.
+
+**Set this even when the server listens on `127.0.0.1` behind a proxy on the same
+machine.** Without a trusted proxy or `INTEL_SETUP_TOKEN`, a localhost server treats
+first-run visitors as local and asks for no setup code, so a stranger could create
+the administrator account through the proxy.
 
 **Finish setup before opening the port.** Run `docker compose logs backend | grep "setup code"`
 for the one-time code. It's only needed while no account exists.
@@ -148,7 +153,8 @@ for the one-time code. It's only needed while no account exists.
   connections past the limit get a 503.
 - **Guest abuse:** guests get 120 fetched URLs per client every 10 minutes and three
   parses at once, if guest reading is on.
-- **Upload memory:** two uploads may be received at once.
+- **Upload memory:** each backend and viewer admits two uploads at once, keeping
+  their slots through parsing, forwarding, and response handling.
 
 ### What still needs you
 
@@ -190,6 +196,11 @@ uv run intel-sourcerer-viewer \
   --host 127.0.0.1 --port 8765
 ```
 
+First-account setup requires the one-time code from the backend log, even when
+the backend binds to localhost. You can supply `INTEL_SETUP_TOKEN` through the
+backend environment instead. This protects a private backend reached through a
+public viewer.
+
 `INTEL_BACKEND_URL` can supply the backend origin instead of `--backend-url`.
 The origin must have no path, embedded credentials, query, or fragment.
 
@@ -204,6 +215,13 @@ Put the public viewer behind an HTTPS reverse proxy. Start the **backend** with
 browser-facing URL, even when the internal connection is HTTP. The viewer uses
 `--host` to select the interface your reverse proxy reaches. Default bindings
 remain localhost. Do not expose the backend port as the browser's API origin.
+
+Alternatively, configure `INTEL_TRUSTED_PROXIES` on the **viewer** to the address
+of its HTTPS reverse proxy. The viewer then validates HTTPS forwarding headers,
+sets HSTS, and sends the validated browser scheme to the backend with its service
+key. The backend accepts this metadata only from an authenticated viewer.
+`INTEL_SECURE_COOKIES=1` on the viewer forces HTTPS behavior when proxy-based
+detection is not used.
 
 ## Responsibilities
 

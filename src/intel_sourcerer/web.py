@@ -218,9 +218,9 @@ def create_server(
     from .auth import Accounts
 
     accounts = Accounts(database, config) if auth_enabled else None
-    # On a reachable address, whoever gets to /setup first would own the server, so they need a code.
+    # A localhost server can still be reached through a public viewer or reverse proxy.
     setup_code = os.environ.get("INTEL_SETUP_TOKEN", "").strip()
-    if accounts and accounts.empty() and not setup_code and host not in LOOPBACK_HOSTS:
+    if accounts and accounts.empty() and not setup_code and (api_only or proxies or host not in LOOPBACK_HOSTS):
         setup_code = secrets.token_urlsafe(18)
         print(f"First-run setup code, needed once to create the administrator: {setup_code}", flush=True)
     upload_slots = threading.BoundedSemaphore(2)
@@ -242,7 +242,15 @@ def create_server(
             return client_address(self.client_address[0], self.headers, proxies)
 
         def over_https(self):
-            return secure_cookies or forwarded_https(self.client_address[0], self.headers, proxies)
+            # Only an authenticated viewer may describe the browser-facing scheme.
+            viewer_https = (
+                api_only
+                and secrets.compare_digest(
+                    self.headers.get("X-Intel-Service-Key", "").encode(), service_key.encode()
+                )
+                and self.headers.get("X-Intel-Client-Proto") == "https"
+            )
+            return secure_cookies or viewer_https or forwarded_https(self.client_address[0], self.headers, proxies)
 
         def service_authorized(self):
             if not api_only:
@@ -837,16 +845,24 @@ def create_server(
             self.wfile.write(content)
 
         def read_upload(self, length):
-            """Uploads are held in memory, so only a couple may come in at once."""
+            """Acquire a slot before buffering; do_POST releases it after all handling."""
             if not upload_slots.acquire(blocking=False):
+                self.close_connection = True
                 self.respond({"error": "Another upload is in progress. Try again shortly."}, status=429)
                 return None
-            try:
-                return self.rfile.read(length)
-            finally:
-                upload_slots.release()
+            self.upload_acquired = True
+            return self.rfile.read(length)
 
         def do_POST(self):
+            self.upload_acquired = False
+            try:
+                self.handle_post()
+            finally:
+                # handle_post's frame (including any payload) is gone before admission resumes.
+                if self.upload_acquired:
+                    upload_slots.release()
+
+        def handle_post(self):
             if not api_only and urlsplit(self.path).path == "/guest/prepare":
                 from .guest_routes import prepare_guest
 

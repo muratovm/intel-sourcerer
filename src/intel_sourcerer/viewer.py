@@ -8,6 +8,7 @@ and service key. Session cookies are forwarded, never interpreted or stored.
 import argparse
 import json
 import os
+import threading
 from html import escape
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlsplit
@@ -15,7 +16,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 
 from .guest_routes import guest_option
-from .net_safety import BoundedHTTPServer, client_address, trusted_proxies
+from .net_safety import BoundedHTTPServer, client_address, env_flag, forwarded_https, trusted_proxies
 from .templates import SETUP_FIELD, UI_ROOT, load_template, render_template
 
 STATIC_FILES = {
@@ -80,9 +81,14 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
     backend_url = backend_url.rstrip("/")
 
     proxies = trusted_proxies()
+    secure_cookies = env_flag("INTEL_SECURE_COOKIES")
+    upload_slots = threading.BoundedSemaphore(2)
 
     class ViewerHandler(BaseHTTPRequestHandler):
         timeout = 30
+
+        def over_https(self):
+            return secure_cookies or forwarded_https(self.client_address[0], self.headers, proxies)
 
         def upstream_headers(self):
             headers = {
@@ -95,6 +101,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                 {
                     "X-Intel-Service-Key": service_key,
                     "X-Intel-Client-IP": client_address(self.client_address[0], self.headers, proxies),
+                    "X-Intel-Client-Proto": "https" if self.over_https() else "http",
                     "Accept": "application/json",
                     "Accept-Encoding": "identity",
                 }
@@ -124,9 +131,28 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Security-Policy", CSP)
             self.send_header("X-Content-Type-Options", "nosniff")
+            if self.over_https():
+                self.send_header("Strict-Transport-Security", "max-age=31536000")
 
         def redirect(self, location):
             self.reply(status=303, headers=[("Location", location)])
+
+        def json_error(self, message, status):
+            # Uploads read errors as JSON, so plain text would hide the real message.
+            self.close_connection = True
+            self.reply(json.dumps({"error": message}), status, "application/json")
+
+        def may_upload(self):
+            """Upload slots are scarce, so strangers must not be able to hold them with slow requests."""
+            with httpx.Client(timeout=30, trust_env=False, follow_redirects=False) as client:
+                response = client.get(
+                    backend_url + "/api/viewer-session", headers=self.upstream_headers()
+                )
+            # A backend without accounts has no such route and no sign-in to check.
+            if response.status_code == 404:
+                return True
+            response.raise_for_status()
+            return bool(response.json().get("user"))
 
         def model(self, path):
             # A fresh client prevents a pooled cookie jar from mixing users.
@@ -342,6 +368,8 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
             if not path.startswith(("/api/", "/auth/")):
                 self.reply("Not found", 404)
                 return
+            upload_acquired = False
+            body = None
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 limit = (
@@ -354,15 +382,26 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                     else 1_000_000
                 )
                 if not 0 < length <= limit or "Transfer-Encoding" in self.headers:
-                    self.close_connection = True
-                    self.reply("Invalid request size", 413)
+                    self.json_error("Invalid request size", 413)
                     return
+                if path in {"/api/file-upload", "/api/pdf-upload"}:
+                    if not self.may_upload():
+                        self.json_error("Please sign in.", 401)
+                        return
+                    upload_acquired = upload_slots.acquire(blocking=False)
+                    if not upload_acquired:
+                        self.json_error("Another upload is in progress. Try again shortly.", 429)
+                        return
                 body = self.rfile.read(length)
                 if len(body) != length:
                     raise ValueError("Incomplete request")
                 self.proxy("POST", body)
             except (httpx.HTTPError, ValueError):
                 self.unavailable()
+            finally:
+                body = None
+                if upload_acquired:
+                    upload_slots.release()
 
         def proxy(self, method, body=None):
             if not self.path.startswith("/") or self.path.startswith("//"):
