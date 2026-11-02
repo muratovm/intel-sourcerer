@@ -182,6 +182,12 @@ Home → **Set up one-click saving** opens `/save`, with a bookmarklet to drag t
 
 Below 700px the reader switches to Read and Notes tabs, and the app can be installed from the browser over HTTPS or localhost. A service worker answers from the network first and falls back to a local copy. Your queue, kept articles, and the next unread articles are stored ahead of time, up to 30 at a time. Offline reading covers article text, not images from other sites. Notes written offline stay in the browser and are sent when the connection returns. Signing in or out clears the offline copies. Guest sessions are never cached.
 
+## Tags
+
+Add your own tags to any article from the notes column of the reader, such as an actor, a campaign, or a topic. Suggestions come from tags you've already used, and capitalization doesn't split a tag: `APT29` and `apt29` are one tag, kept in the spelling first used. Each tag shows how many other articles share it (for example `+3`), and selecting that lists them.
+
+The **Library** lists every tag with its count. Select one to see only those articles, and select it again to clear the filter. It combines with search and **With notes**. Search also matches tag names, and Markdown exports include the article's tags. Temporary sessions don't have tags.
+
 ## Indicators
 
 The reader's **IOCs** panel lists what it finds in the article text, each group with **Copy all**, and selecting a value jumps to it in the article:

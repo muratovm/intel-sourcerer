@@ -90,6 +90,15 @@ def connect_database(path):
       article_url TEXT PRIMARY KEY REFERENCES articles(url),
       fraction REAL NOT NULL, updated_at TEXT NOT NULL
     );""")
+    db.executescript("""CREATE TABLE IF NOT EXISTS article_tags (
+      article_url TEXT NOT NULL REFERENCES articles(url) DEFERRABLE INITIALLY DEFERRED,
+      tag TEXT NOT NULL COLLATE NOCASE, created_at TEXT NOT NULL,
+      PRIMARY KEY(article_url,tag)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS article_tags_tag ON article_tags(tag);
+    CREATE TRIGGER IF NOT EXISTS article_tags_removed AFTER DELETE ON articles
+      BEGIN DELETE FROM article_tags WHERE article_url=OLD.url; END;
+    """)
     db.executescript("""CREATE TABLE IF NOT EXISTS source_fetch_state (
       source_id TEXT PRIMARY KEY, etag TEXT, last_modified TEXT, covered_since TEXT,
       paused_until TEXT, pause_reason TEXT

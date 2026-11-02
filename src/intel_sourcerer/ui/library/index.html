@@ -53,7 +53,7 @@
           type="hidden"
           name="notes"
           value="${notes_filter}"
-        /><button class="sr-only" type="submit">Search</button>
+        /><input type="hidden" name="tag" value="${tag}" /><button class="sr-only" type="submit">Search</button>
       </form>
       <nav class="lib-tabs" aria-label="Library filters">
         <a class="${all_tab_class}" href="${all_link}"
@@ -63,6 +63,7 @@
         ><span>${article_count} articles</span>
       </nav>
       </div>
+      ${tag_filter}
       <div class="lib-workspace">
         <section class="lib-list" aria-label="Saved articles">
           ${article_rows}

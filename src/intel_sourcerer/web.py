@@ -562,6 +562,7 @@ def create_server(
                                 params.get("notes", [""])[0] == "1",
                                 params.get("selected", [""])[0],
                                 csrf_token,
+                                params.get("tag", [""])[0],
                             ),
                             "text/html; charset=utf-8",
                         )
@@ -762,6 +763,10 @@ def create_server(
                                     "week": week_counts(db),
                                 }
                             )
+                        elif path == "/api/tags":
+                            from .tags import tag_state
+
+                            self.respond(tag_state(db, parse_qs(urlsplit(self.path).query).get("url", [""])[0]))
                         elif path == "/api/related":
                             from .correlation import related_reports
 
@@ -825,6 +830,8 @@ def create_server(
                             )
                         else:
                             self.respond({"error": "Not found"}, status=404)
+                except SessionError as exc:
+                    self.respond({"error": str(exc)}, status=404)
                 except (sqlite3.Error, OSError, ValueError):
                     self.respond({"error": "Backend data unavailable"}, status=503)
                 return
@@ -1054,6 +1061,14 @@ def create_server(
                             result = set_triage(
                                 db, data.get("urls"), data.get("decision")
                             )
+                        elif self.path == "/api/tags":
+                            from .tags import add_tag
+
+                            result = add_tag(db, data.get("url"), data.get("tag"))
+                        elif self.path == "/api/tag-delete":
+                            from .tags import remove_tag
+
+                            result = remove_tag(db, data.get("url"), data.get("tag"))
                         elif self.path == "/api/rename-article":
                             result = rename_article(
                                 db, data.get("url"), data.get("title")

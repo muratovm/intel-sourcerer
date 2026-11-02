@@ -2996,6 +2996,25 @@ mark.article-highlight,
 .related-report { display: flex; flex: 1 1 100%; min-width: 0; min-height: 44px; flex-direction: column; justify-content: center; gap: 2px; padding: 6px 0; font-size: 12px; line-height: 1.4; text-decoration: none; }
 .related-title { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .related-report:hover .related-title { text-decoration: underline; }
+.tags-panel { margin-top: 8px; font-size: 14px; }
+.tags-panel .ioc-group { margin: 0 0 8px; padding: 0; list-style: none; }
+.tags-panel #tags-list[hidden] { display: none; }
+.tags-panel #tags-list > li { align-items: center; }
+.tag-name { flex: 1 1 0; min-width: 0; padding: 12px 0; font-size: 13px; font-weight: 500; text-decoration: none; overflow-wrap: anywhere; }
+.tag-name:hover { text-decoration: underline; }
+.ioc-group .tag-remove { flex: 0 0 auto; min-width: 44px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 16px; }
+.tag-form { display: flex; gap: 8px; }
+.tag-form input { flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 0 12px; font: inherit; font-size: 14px; }
+.tag-form button { min-height: 44px; padding: 0 14px; font-size: 13px; }
+.lib-tag { display: inline-block; padding: 3px 8px; border-radius: 5px; background: var(--hex-e3f5eb); color: var(--hex-08734c); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; text-decoration: none; }
+a.lib-tag { min-height: 44px; padding: 12px 10px; line-height: 20px; box-sizing: border-box; }
+.lib-tag > span { margin-left: 2px; opacity: 0.7; }
+.lib-tag.active { background: var(--hex-08734c); color: #fff; font-weight: 600; }
+.lib-meta > .lib-tag { margin-left: 4px; }
+.lib-meta > .lib-tag::before { content: none; }
+.lib-tag-filter { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; }
+.lib-detail-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.lib-detail-tags:empty { display: none; }
 .related-panel ul { margin: 0 0 8px; padding: 0; list-style: none; border-top: 1px solid var(--rule); }
 .related-panel li { padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
 .related-shared { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }

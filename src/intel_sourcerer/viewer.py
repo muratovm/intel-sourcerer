@@ -331,6 +331,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                     params.get("notes", [""])[0] == "1",
                     params.get("selected", [""])[0],
                     session["csrf_token"],
+                    params.get("tag", [""])[0],
                 )
             elif path == "/sources":
                 from .config import PublisherSource

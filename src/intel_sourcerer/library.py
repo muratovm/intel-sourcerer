@@ -38,12 +38,14 @@ def export_article(db, url):
     from .iocs import extract_iocs, iocs_markdown
 
     indicators = iocs_markdown(extract_iocs(row["content_html"] or render_markdown(row["content_markdown"] or "")))
-    return f"# {row['title']}\n\nSource: {url}\n\nPublished: {row['published_at']}\n\n## Notes\n\n{notes}\n\n{highlights}{indicators}## Article\n\n{row['content_markdown'] or row['content_text'] or ''}\n"
+    tags = [item["tag"] for item in db.execute("SELECT tag FROM article_tags WHERE article_url=? ORDER BY tag COLLATE NOCASE", (url,))]
+    tag_line = f"Tags: {', '.join(tags)}\n\n" if tags else ""
+    return f"# {row['title']}\n\nSource: {url}\n\nPublished: {row['published_at']}\n\n{tag_line}## Notes\n\n{notes}\n\n{highlights}{indicators}## Article\n\n{row['content_markdown'] or row['content_text'] or ''}\n"
 
 
-def render_library(db, query="", notes_only=False, selected="", csrf_token=""):
+def render_library(db, query="", notes_only=False, selected="", csrf_token="", tag=""):
     rows = library_rows(db)
-    return render_library_rows(rows, query, notes_only, selected, csrf_token)
+    return render_library_rows(rows, query, notes_only, selected, csrf_token, tag)
 
 
 def library_rows(db):
@@ -51,18 +53,25 @@ def library_rows(db):
     return [
         dict(row)
         for row in db.execute(
-            "SELECT a.*,s.name AS publisher,(SELECT json_group_array(h.quote) FROM (SELECT quote FROM article_highlights WHERE article_url=a.url ORDER BY created_at,id) h) AS highlights_json FROM articles a JOIN sources s ON s.id=a.source_id ORDER BY julianday(a.published_at) DESC,a.title COLLATE NOCASE,a.url"
+            "SELECT a.*,s.name AS publisher,(SELECT json_group_array(h.quote) FROM (SELECT quote FROM article_highlights WHERE article_url=a.url ORDER BY created_at,id) h) AS highlights_json,(SELECT json_group_array(t.tag) FROM (SELECT tag FROM article_tags WHERE article_url=a.url ORDER BY tag COLLATE NOCASE) t) AS tags_json FROM articles a JOIN sources s ON s.id=a.source_id ORDER BY julianday(a.published_at) DESC,a.title COLLATE NOCASE,a.url"
         )
     ]
 
 
-def render_library_rows(rows, query="", notes_only=False, selected="", csrf_token=""):
+def render_library_rows(rows, query="", notes_only=False, selected="", csrf_token="", tag=""):
     """Render a library from backend JSON without opening a database."""
     from .sessions import clean_notes
 
     terms = query.casefold().split()
     matches = []
+    counts = {}
     for row in rows:
+        for name in json.loads(row.get("tags_json") or "[]"):
+            counts[name] = counts.get(name, 0) + 1
+    for row in rows:
+        tags = json.loads(row.get("tags_json") or "[]")
+        if tag and tag.casefold() not in {name.casefold() for name in tags}:
+            continue
         notes = (
             BeautifulSoup(row["notes"], "html.parser").get_text(" ", strip=True)
             if row["notes_format"] == "html"
@@ -74,7 +83,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
         if all(
             term
             in " ".join(
-                [row["title"], row["publisher"], row["content_text"] or "", notes, *quotes]
+                [row["title"], row["publisher"], row["content_text"] or "", notes, *quotes, *tags]
             ).casefold()
             for term in terms
         ):
@@ -86,7 +95,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
     def link(**kwargs):
         return escape(
             "/library?"
-            + urlencode(dict(q=query, notes="1" if notes_only else "0", **kwargs)),
+            + urlencode(dict(dict(q=query, notes="1" if notes_only else "0", tag=tag), **kwargs)),
             quote=True,
         )
 
@@ -114,6 +123,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
                 format_class=label.lower(),
                 published_date=escape(short_date(row["published_at"])),
                 badges=badges,
+                tags="".join(f'<span class="lib-tag">{escape(name)}</span>' for name in json.loads(row.get("tags_json") or "[]")),
             )
         )
     detail = render_template("library/empty.html")
@@ -149,14 +159,24 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             exported=exported,
             url=escape(active["url"], quote=True),
             notes=notes,
+            tags="".join(f'<a class="lib-tag" href="{link(tag=name, selected="")}">{escape(name)}</a>' for name in json.loads(active.get("tags_json") or "[]")),
         )
-    all_link = escape("/library?" + urlencode({"q": query}), quote=True)
-    notes_link = escape("/library?" + urlencode({"q": query, "notes": "1"}), quote=True)
+    all_link = link(notes="0")
+    notes_link = link(notes="1")
+    # Selecting the active tag again clears the filter.
+    tag_links = "".join(
+        f'<a class="lib-tag{" active" if name.casefold() == tag.casefold() else ""}" '
+        f'{"aria-current=true " if name.casefold() == tag.casefold() else ""}'
+        f'href="{link(tag="" if name.casefold() == tag.casefold() else name)}">{escape(name)} <span>{count}</span></a>'
+        for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold()))
+    )
     return render_template(
         "library/index.html",
         csrf_token=escape(csrf_token, quote=True),
         query=escape(query, quote=True),
         notes_filter="1" if notes_only else "0",
+        tag=escape(tag, quote=True),
+        tag_filter=f'<nav class="lib-tag-filter" aria-label="Filter by tag">{tag_links}</nav>' if tag_links else "",
         all_tab_class="active" if not notes_only else "",
         all_link=all_link,
         notes_tab_class="active" if notes_only else "",

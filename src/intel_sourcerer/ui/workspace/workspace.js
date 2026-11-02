@@ -785,6 +785,7 @@ async function renderQueue() {
   renderHighlights();
   renderIOCs();
   loadRelated(article);
+  loadTags(article);
   const next = q.items[q.cursor + 1];
   document
     .querySelectorAll(".position")
@@ -1306,6 +1307,61 @@ async function loadRelated(article) {
     // The article is still readable without this, including offline and in temporary sessions.
   }
 }
+function renderTags(data) {
+  $("tags-list").replaceChildren(
+    ...data.tags.map(({ tag, others }) => {
+      const row = document.createElement("li"),
+        link = document.createElement("a"),
+        remove = document.createElement("button");
+      link.className = "tag-name";
+      link.href = "/library?" + new URLSearchParams({ tag });
+      link.textContent = tag;
+      link.title = `All articles tagged ${tag}`;
+      remove.type = "button";
+      remove.className = "tag-remove";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", `Remove tag ${tag}`);
+      remove.onclick = () => changeTags("/api/tag-delete", { tag });
+      row.append(link);
+      if (others.length) addAlsoInButton(row, others);
+      // The list that button adds belongs on its own line, after the remove button.
+      row.insertBefore(remove, row.querySelector(".ioc-also-list"));
+      return row;
+    }),
+  );
+  $("tags-list").hidden = !data.tags.length;
+  $("tag-suggestions").replaceChildren(
+    ...data.suggestions.map((value) => Object.assign(document.createElement("option"), { value })),
+  );
+  $("tags-panel").hidden = false;
+}
+async function changeTags(path, change) {
+  const article = currentArticle;
+  try {
+    const data = await api(path, { url: article.url, ...change });
+    if (currentArticle === article) renderTags(data);
+    return true;
+  } catch (error) {
+    notice(error.message);
+    return false;
+  }
+}
+async function loadTags(article) {
+  $("tags-panel").hidden = true;
+  $("tag-input").value = "";
+  try {
+    const data = await api("/api/tags?" + new URLSearchParams({ url: article.url }));
+    if (currentArticle === article) renderTags(data);
+  } catch {
+    // Offline and temporary sessions have no tag store, so the panel stays hidden.
+  }
+}
+$("tag-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = $("tag-input"),
+    tag = input.value.trim();
+  if (tag && (await changeTags("/api/tags", { tag }))) input.value = "";
+});
 function iocGroup(title, items, label, kind) {
   const group = document.createElement("section"),
     heading = document.createElement("div"),

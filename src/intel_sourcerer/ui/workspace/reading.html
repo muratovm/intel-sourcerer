@@ -130,6 +130,15 @@
           Mark unread
         </button>
       </div>
+      <section id="tags-panel" class="tags-panel" aria-label="Tags" hidden>
+        <ul id="tags-list" class="ioc-group"></ul>
+        <form id="tag-form" class="tag-form">
+          <label class="sr-only" for="tag-input">Add a tag</label>
+          <input id="tag-input" type="text" list="tag-suggestions" maxlength="40" placeholder="Add a tag" autocomplete="off" />
+          <datalist id="tag-suggestions"></datalist>
+          <button type="submit">Add</button>
+        </form>
+      </section>
       <details id="highlights-panel" class="highlights-panel" hidden>
         <summary>Highlights <span id="highlights-count" class="muted"></span></summary>
         <ol id="highlights-list"></ol>
