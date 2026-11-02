@@ -1,12 +1,22 @@
 """Public temporary-session routes shared by combined and standalone viewers."""
 
+import threading
+
 import httpx
 
-from .templates import UI_ROOT
+from .net_safety import RateLimiter, guest_enabled
+from .templates import UI_ROOT, load_template
+
+# Guests need no account, so these keep them from turning the server into a free fetcher.
+# The budget counts URLs fetched, because refreshing a guest page re-fetches its queue.
+GUEST_BUDGET = RateLimiter(120, 600)
+GUEST_SLOTS = threading.BoundedSemaphore(3)
 
 
 def guest_page(path):
     """Return a guest page or asset without accessing account storage."""
+    if not guest_enabled():
+        return None
     if path in {"/guest", "/guest/read"}:
         from .temporary import temporary_page
 
@@ -21,9 +31,24 @@ def guest_page(path):
     return None
 
 
-def prepare_guest(headers, stream):
+def guest_option():
+    return load_template("auth/guest-option.html") if guest_enabled() else ""
+
+
+def prepare_guest(headers, stream, client="unknown"):
     """Parse bounded guest input without persisting articles or notes."""
     from .temporary import parse_session_content
+
+    if not guest_enabled():
+        return {"error": "Guest reading is turned off."}, 404
+    if not GUEST_BUDGET.allow(client):
+        return {"error": "Too many requests. Try again in a few minutes."}, 429
+    if not GUEST_SLOTS.acquire(blocking=False):
+        return {"error": "The reader is busy. Try again shortly."}, 503
+
+    def charge():
+        if not GUEST_BUDGET.allow(client):
+            raise ValueError("Too many articles fetched. Try again in a few minutes.")
 
     try:
         length = int(headers.get("Content-Length", "0"))
@@ -34,6 +59,8 @@ def prepare_guest(headers, stream):
         body = stream.read(length)
         if len(body) != length:
             raise ValueError("Incomplete file.")
-        return parse_session_content(body, headers.get("Content-Type", "")), 200
+        return parse_session_content(body, headers.get("Content-Type", ""), charge), 200
     except (ValueError, AttributeError, TypeError, OSError, httpx.HTTPError) as exc:
         return {"error": str(exc)}, 400
+    finally:
+        GUEST_SLOTS.release()

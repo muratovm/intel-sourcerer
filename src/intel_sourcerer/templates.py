@@ -9,6 +9,11 @@ from pathlib import Path
 from string import Template
 
 UI_ROOT = Path(__file__).parent / "ui"
+SETUP_FIELD = (
+    '<label for="auth-setup-code">Setup code</label>'
+    '<input id="auth-setup-code" name="setup_code" autocomplete="off" spellcheck="false" '
+    'placeholder="Printed in the server log" required />'
+)
 
 
 def load_template(name):

@@ -2,6 +2,8 @@
 import base64
 from urllib.parse import urlsplit, quote
 import httpx
+
+from .net_safety import public_only
 from .media_import import save_item
 
 
@@ -17,7 +19,7 @@ async def import_github(database,url):
         api += '/releases/tags/'+quote(tag,safe='') if tag else '/releases/latest'
     else:
         api += '/readme'
-    async with httpx.AsyncClient(timeout=20,headers={'Accept':'application/vnd.github+json','User-Agent':'IntelSourcerer/0.1'}) as client:
+    async with public_only(httpx.AsyncClient(timeout=20,headers={'Accept':'application/vnd.github+json','User-Agent':'IntelSourcerer/0.1'},trust_env=False)) as client:
         response = await client.get(api)
         if response.status_code!=200:
             raise ValueError('GitHub could not provide this public README or release (it may be unavailable or rate limited).')

@@ -7,6 +7,8 @@ import socket
 from urllib.parse import urlsplit, urljoin, urldefrag, unquote
 from pathlib import Path
 import httpx
+
+from .net_safety import public_only
 from bs4 import BeautifulSoup
 import trafilatura
 from .content import extract_article
@@ -88,7 +90,7 @@ async def import_link(database, url):
                 content_url = preferred['content_url']
                 is_pdf = False
             else:
-                async with httpx.AsyncClient(timeout=20,headers={'User-Agent':'IntelSourcerer/0.1'}) as client:
+                async with public_only(httpx.AsyncClient(timeout=20,trust_env=False,headers={'User-Agent':'IntelSourcerer/0.1'})) as client:
                     for _ in range(6):
                         url=await asyncio.to_thread(public_url,url)
                         async with client.stream('GET',url) as response:

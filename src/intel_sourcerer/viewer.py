@@ -9,12 +9,14 @@ import argparse
 import json
 import os
 from html import escape
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
-from .templates import UI_ROOT, load_template, render_template
+from .guest_routes import guest_option
+from .net_safety import BoundedHTTPServer, client_address, trusted_proxies
+from .templates import SETUP_FIELD, UI_ROOT, load_template, render_template
 
 STATIC_FILES = {
     "/reader.css": ("shared/styles.css", "text/css; charset=utf-8"),
@@ -77,7 +79,11 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
         )
     backend_url = backend_url.rstrip("/")
 
+    proxies = trusted_proxies()
+
     class ViewerHandler(BaseHTTPRequestHandler):
+        timeout = 30
+
         def upstream_headers(self):
             headers = {
                 name: self.headers[name]
@@ -88,7 +94,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
             headers.update(
                 {
                     "X-Intel-Service-Key": service_key,
-                    "X-Intel-Client-IP": self.client_address[0],
+                    "X-Intel-Client-IP": client_address(self.client_address[0], self.headers, proxies),
                     "Accept": "application/json",
                     "Accept-Encoding": "identity",
                 }
@@ -147,8 +153,9 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                 csrf=escape(session["csrf_token"], quote=True),
                 autocomplete="new-password" if setup else "current-password",
                 button="Create administrator" if setup else "Sign in",
+                setup_field=SETUP_FIELD if setup and session.get("setup_code_required") else "",
             )
-            content += load_template("auth/guest-option.html")
+            content += guest_option()
             self.reply(
                 render_template(
                     "auth/page.html",
@@ -173,6 +180,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                     csrf=csrf,
                     autocomplete="new-password",
                     button="Create account",
+                    setup_field="",
                 )
             content = render_template(
                 "auth/account.html",
@@ -210,7 +218,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                         title="Sign-in service unavailable",
                         description="You can still read in a temporary guest session.",
                         error=message,
-                        content=load_template("auth/guest-option.html"),
+                        content=guest_option(),
                     ),
                     502,
                 )
@@ -321,7 +329,9 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
         def prepare_guest(self):
             from .guest_routes import prepare_guest
 
-            result, status = prepare_guest(self.headers, self.rfile)
+            result, status = prepare_guest(
+                self.headers, self.rfile, client_address(self.client_address[0], self.headers, proxies)
+            )
             self.reply(json.dumps(result), status, "application/json")
 
         def do_POST(self):
@@ -411,7 +421,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                 for chunk in response.iter_raw():
                     self.wfile.write(chunk)
 
-    return ThreadingHTTPServer((host, port), ViewerHandler)
+    return BoundedHTTPServer((host, port), ViewerHandler)
 
 
 def main():

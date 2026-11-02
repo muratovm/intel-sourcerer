@@ -27,6 +27,140 @@ libraries. Both modes share the same address; no private API port is needed.
 Ctrl+C stops the server. Existing accounts and libraries are preserved.
 Use `--host`, `--port`, `--database`, or `--config` to override defaults.
 
+## Docker with persistent SQLite
+
+From the project root:
+
+```sh
+docker compose up --build -d --wait
+docker compose ps
+```
+
+Open <http://127.0.0.1:8775/>. Compose runs the combined web/API application as
+`backend`, with the existing account and guest flows. It runs as UID/GID 10001,
+uses the locked Python dependencies, and checks `/health` for readiness.
+`INTEL_PORT` changes the published host port (default 8775, so it can run beside a local
+server on 8765); the container always listens on 8765.
+
+SQLite is an embedded database, so it uses a persistent named volume rather than
+a database service. Compose mounts `intel-data` at `/app/data`; Docker normally
+prefixes its name with the Compose project name. Accounts store absolute paths,
+so keep this mount at `/app/data` when moving or restoring Docker data. Keep the
+same Compose project name to reuse its volume. Local development data is separate
+and is never mounted or copied automatically.
+
+The image includes `config/sources.toml` as the initial source template. Account
+creation copies that template into the writable data volume; personal source
+toggles persist there. Changing the image's template affects newly created users.
+Daily SQLite snapshots also remain inside the volume and do not protect against
+deleting the volume or losing the Docker host.
+
+### Back up and restore Docker data
+
+Back up the entire data directory to keep accounts, personal source configuration,
+media, and every user's library together. Stop the app for a consistent copy:
+
+```sh
+docker compose stop backend
+docker compose cp backend:/app/data ./intel-docker-backup
+docker compose start backend
+```
+
+Choose a new backup destination for each run and keep an additional copy on
+separate storage. Treat the directory as private: it includes account records and
+saved content. To restore, first back up the current Docker data as above. Restore
+into an empty volume, using the same Compose project, image and `/app/data` mount:
+
+```sh
+# Create the stopped container and its empty volume on a fresh Docker deployment.
+docker compose create backend
+docker compose cp ./intel-docker-backup/. backend:/app/data
+docker compose run --rm --no-deps --user root backend chown -R 10001:10001 /app/data
+docker compose up -d --wait
+```
+
+Do not overlay a backup onto an existing data directory: stale SQLite sidecars or
+files from newer accounts can survive. Verify sign-in, notes, queues and media
+after restoring. These steps restore Docker backups; importing a host installation
+also requires translating account database/config paths to `/app/data`.
+
+### HTTPS and remote access
+
+The default host binding is `127.0.0.1`, suitable for a reverse proxy on the Docker
+host. Put remote access behind an HTTPS reverse proxy. When using HTTPS, add a
+`compose.override.yaml` with:
+
+```yaml
+services:
+  backend:
+    command:
+      - intel-sourcerer-web
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8765"
+      - --secure-cookies
+```
+
+Then run `docker compose up -d --wait`. The override keeps the volume and health
+check, while enabling secure session cookies. Use ordinary HTTP localhost without
+this override for local access.
+
+## Running on the public internet
+
+Run one container on a VM with a persistent local disk, behind an HTTPS reverse
+proxy such as Caddy or nginx. SQLite needs a stable local disk and one writer, so
+avoid platforms that replace or scale containers freely, and network file shares.
+
+```sh
+INTEL_TRUSTED_PROXIES=<proxy address> \
+  docker compose -f compose.yaml -f compose.public.yaml up --build -d --wait
+```
+
+`compose.public.yaml` turns on secure cookies, turns off guest reading, makes the
+filesystem read-only except the data volume and `/tmp`, drops all Linux
+capabilities, and limits memory and processes.
+
+| Setting | Purpose | Default |
+| --- | --- | --- |
+| `INTEL_TRUSTED_PROXIES` | Comma-separated proxy addresses or networks allowed to report the client through `X-Forwarded-For` and `X-Forwarded-Proto` | None; forwarded headers are ignored |
+| `INTEL_SETUP_TOKEN` | Code required to create the first account | Random and printed to the log, when listening beyond localhost |
+| `INTEL_SECURE_COOKIES` | Always mark session cookies Secure and send HSTS | Off, but on for requests a trusted proxy reports as HTTPS |
+| `INTEL_GUEST` | Set to `off` to remove guest reading | On |
+| `INTEL_MAX_CONNECTIONS` | Connections served at once; each direct client gets a quarter | 64 |
+
+**Set `INTEL_TRUSTED_PROXIES` to the proxy's address as the container sees it, and
+nothing wider.** The address appears at the start of each line in `docker compose logs
+backend` when a request comes through the proxy. If it's too narrow, every visitor
+shares one address and one attacker can trigger the login limits for everybody. If
+it's too wide, clients can forge their address and avoid those limits.
+
+**Finish setup before opening the port.** Run `docker compose logs backend | grep "setup code"`
+for the one-time code. It's only needed while no account exists.
+
+### What the app protects against
+
+- **Internal network access:** every outgoing fetch checks the address when the
+  connection opens, including after redirects and for URLs in feeds. That covers DNS
+  rebinding and cloud metadata addresses. It uses httpx internals and refuses to run
+  if an upgrade moves them.
+- **Slow or flooding clients:** quiet connections are dropped after 30 seconds, and
+  connections past the limit get a 503.
+- **Guest abuse:** guests get 120 fetched URLs per client every 10 minutes and three
+  parses at once, if guest reading is on.
+- **Upload memory:** two uploads may be received at once.
+
+### What still needs you
+
+- Keep the proxy handling TLS and request limits. It's the better place to stop a client
+  that sends bytes slowly enough to stay under the 30-second timeout.
+- Send backups off the machine. Snapshots live in the same volume as the data.
+- Scan images and pin base images by digest.
+- Account limits are in memory or per address. Nothing here stops a distributed
+  password-guessing attack beyond the per-account limit, and there's no two-factor sign-in.
+- Article parsing runs on untrusted files, including PDFs. Container limits contain the
+  damage but don't remove the risk, so keep the parsers updated.
+
 ## Two independent processes
 
 Generate a random secret, then configure the **same** `INTEL_BACKEND_KEY` on each

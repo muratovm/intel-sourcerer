@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 import httpx
+
+from .net_safety import public_only
 import trafilatura
 
 from .content import extract_article
@@ -118,7 +120,8 @@ async def import_articles(config, database, since, until):
     db = connect_database(database)
     started = datetime.now(timezone.utc).isoformat()
     try:
-        async with httpx.AsyncClient(timeout=20,follow_redirects=True,headers={'User-Agent':'IntelSourcerer/0.1'}) as client:
+        # Feeds choose these URLs, so a hostile feed could otherwise point the importer at internal services.
+        async with public_only(httpx.AsyncClient(timeout=20,follow_redirects=True,headers={'User-Agent':'IntelSourcerer/0.1'},trust_env=False)) as client:
             for source in sources:
                 save_source(db, source)
                 # Fetching below takes a while, and an open write would block note saves throughout.

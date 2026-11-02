@@ -5,6 +5,8 @@ from pathlib import Path
 from urllib.parse import unquote, urljoin, urlsplit
 
 import httpx
+
+from .net_safety import public_only
 from bs4 import BeautifulSoup
 
 from .content import extract_article, render_article_html, render_markdown
@@ -20,7 +22,7 @@ MIN_KEPT_TEXT = 0.5
 def fetch_public(url):
     from .discovery import public_url
 
-    with httpx.Client(timeout=25, headers={'User-Agent': 'IntelSourcerer/0.1'}) as client:
+    with public_only(httpx.Client(timeout=25, trust_env=False, headers={'User-Agent': 'IntelSourcerer/0.1'})) as client:
         for _ in range(6):
             url = public_url(url)
             response = client.get(url)

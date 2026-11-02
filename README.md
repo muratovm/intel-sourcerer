@@ -24,6 +24,38 @@ uv run intel-sourcerer-web --database data/intel_sourcerer.sqlite3 --port 8765
 uv run pytest -q
 ```
 
+## Run with Docker
+
+Requires Docker with Compose (Docker Desktop or OrbStack).
+
+```sh
+docker compose up --build -d --wait
+```
+
+Open [Intel Sourcerer](http://127.0.0.1:8775/) and create your first account. The
+server needs a one-time setup code for this, printed by
+`docker compose logs backend`.
+The `backend` container serves the interface and API. SQLite runs inside that
+process; the `intel-data` named volume stores accounts, libraries, personal source
+settings, uploads, and daily snapshots under `/app/data`. There is no separate
+database server or container. This starts a fresh library and does not import or
+modify your existing local `data/` directory. Private data and `.env` files are
+excluded from the image build.
+
+```sh
+docker compose logs -f backend
+docker compose down                 # Stop; saved data remains in the volume
+docker compose up -d --wait         # Restart with the same saved data
+docker compose up --build -d --wait # Rebuild after updating the application
+
+# Optional: change the host port
+INTEL_PORT=8875 docker compose up -d --wait
+```
+
+Do not use `docker compose down --volumes` unless you intend to delete the saved
+Docker data. The port is published on localhost. For HTTPS or remote access, see
+[Docker hosting and backups](docs/hosting.md#docker-with-persistent-sqlite).
+
 ## Reading workflow
 
 - **Home:** resume the current session, find new articles, build a new queue, and revisit saved note previews. **To triage** lists unread articles to Keep or Skip, with Undo and a bulk skip for anything older than 30 days. **Kept to read** starts a session from what you kept. Skipped articles leave the queue builder but stay in the Library. A line shows articles saved and read in the last 7 days.
@@ -179,9 +211,8 @@ Sessions expire after eight hours; changing a password revokes existing sessions
 Regular users upload local files; importing arbitrary server filesystem paths is
 restricted to the administrator. Password recovery by email is not implemented.
 
-The server still binds to localhost. For access from other computers, deploy behind
-an HTTPS reverse proxy and start with `--secure-cookies` so session cookies are sent
-only over HTTPS. Do not enable this flag for the ordinary local HTTP address.
+The server binds to localhost by default. For access from other computers, deploy
+behind an HTTPS reverse proxy and follow [running on the public internet](docs/hosting.md#running-on-the-public-internet).
 
 ## Separate viewer and backend hosting
 

@@ -10,6 +10,8 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import feedparser
 import httpx
 
+from .net_safety import public_only
+
 
 @dataclass(frozen=True)
 class FeedSource:
@@ -154,5 +156,5 @@ async def fetch_feeds(
 
     if client is not None:
         return await collect(client)
-    async with httpx.AsyncClient() as shared:
+    async with public_only(httpx.AsyncClient(trust_env=False)) as shared:
         return await collect(shared)

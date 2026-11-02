@@ -10,6 +10,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
+
+from .net_safety import public_only
 from bs4 import BeautifulSoup
 
 from .content import arrange_media, extract_article, render_article_html, render_markdown
@@ -114,7 +116,7 @@ def load_article(value):
         preferred = preferred_article(value)
         if preferred:
             return preferred
-        with httpx.Client(timeout=30, follow_redirects=True) as client:
+        with public_only(httpx.Client(timeout=30, follow_redirects=True, trust_env=False)) as client:
             response = client.get(value)
             response.raise_for_status()
             if len(response.content) > 20_000_000:
@@ -352,7 +354,7 @@ def load_public_article(value, *, prefer_arxiv=True):
     raise ValueError("Too many article redirects.")
 
 
-def parse_session_content(body, content_type):
+def parse_session_content(body, content_type, charge=None):
     """Stateless parsing: sources arrive from the tab and are never persisted."""
     if content_type.startswith("application/pdf"):
         from .pdf_content import extract_pdf_html
@@ -380,6 +382,8 @@ def parse_session_content(body, content_type):
                 "body_html",
             )
         ):
+            if charge:
+                charge()
             loaded = load_public_article(source.get("url", ""))
             loaded["url"] = source["url"]
             loaded["source"] = source

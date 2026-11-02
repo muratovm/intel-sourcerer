@@ -3,9 +3,9 @@
 import argparse
 import os
 from datetime import datetime
-from .templates import UI_ROOT, load_template, render_template
+from .templates import UI_ROOT, load_template, render_template, SETUP_FIELD
 from html import escape
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 import sqlite3
 import secrets
@@ -21,7 +21,16 @@ from .importer import import_articles
 from contextlib import closing
 from bs4 import BeautifulSoup
 
+from .guest_routes import guest_option
 from .iocs import extract_iocs
+from .net_safety import (
+    LOOPBACK_HOSTS,
+    BoundedHTTPServer,
+    client_address,
+    env_flag,
+    forwarded_https,
+    trusted_proxies,
+)
 from .reading_state import (
     delete_highlight,
     get_position,
@@ -198,6 +207,8 @@ def create_server(
             "The standalone backend requires a service key of at least 32 characters."
         )
     connect_database(database).close()
+    secure_cookies = secure_cookies or env_flag("INTEL_SECURE_COOKIES")
+    proxies = trusted_proxies()
     from .backups import backup_database
 
     backup_database(database)
@@ -207,6 +218,12 @@ def create_server(
     from .auth import Accounts
 
     accounts = Accounts(database, config) if auth_enabled else None
+    # On a reachable address, whoever gets to /setup first would own the server, so they need a code.
+    setup_code = os.environ.get("INTEL_SETUP_TOKEN", "").strip()
+    if accounts and accounts.empty() and not setup_code and host not in LOOPBACK_HOSTS:
+        setup_code = secrets.token_urlsafe(18)
+        print(f"First-run setup code, needed once to create the administrator: {setup_code}", flush=True)
+    upload_slots = threading.BoundedSemaphore(2)
     base_database, base_config, default_csrf = database, config, csrf_token
 
     migrated = {str(database)}
@@ -218,6 +235,15 @@ def create_server(
             migrated.add(str(path))
 
     class Handler(BaseHTTPRequestHandler):
+        # A client that goes quiet gives its thread back rather than holding it forever.
+        timeout = 30
+
+        def real_client(self):
+            return client_address(self.client_address[0], self.headers, proxies)
+
+        def over_https(self):
+            return secure_cookies or forwarded_https(self.client_address[0], self.headers, proxies)
+
         def service_authorized(self):
             if not api_only:
                 return True
@@ -244,6 +270,7 @@ def create_server(
                     else None,
                     "csrf_token": session["csrf"],
                     "setup_required": accounts.empty(),
+                    "setup_code_required": bool(setup_code) and accounts.empty(),
                 }
             )
 
@@ -253,7 +280,7 @@ def create_server(
         def cookie(self, token):
             self.pending_cookie = (
                 f"intel_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800"
-                + ("; Secure" if secure_cookies else "")
+                + ("; Secure" if self.over_https() else "")
             )
 
         def auth_page(self, setup=False, error="", status=200):
@@ -275,6 +302,7 @@ def create_server(
                 csrf=escape(csrf),
                 autocomplete="new-password" if setup else "current-password",
                 button="Create administrator" if setup else "Sign in",
+                setup_field=SETUP_FIELD if setup and setup_code else "",
             )
             self.respond(
                 render_template(
@@ -284,7 +312,7 @@ def create_server(
                     if setup
                     else "Your library, notes, and reading history are private to your account.",
                     error=escape(error),
-                    content=content + load_template("auth/guest-option.html"),
+                    content=content + guest_option(),
                 ),
                 "text/html; charset=utf-8",
                 status,
@@ -321,6 +349,7 @@ def create_server(
                     csrf=csrf,
                     autocomplete="new-password",
                     button="Create account",
+                    setup_field="",
                 )
             self.respond(
                 render_template(
@@ -354,6 +383,11 @@ def create_server(
                     data.get("password", [""])[0],
                 )
                 if path == "/auth/setup":
+                    if setup_code and not secrets.compare_digest(
+                        data.get("setup_code", [""])[0].strip().encode(),
+                        setup_code.encode(),
+                    ):
+                        raise ValueError("That setup code isn't right. Check the server log.")
                     user_id = accounts.create_user(username, password, first=True)
                 elif path == "/auth/login":
                     user_id = accounts.login(
@@ -361,7 +395,7 @@ def create_server(
                         password,
                         self.headers.get("X-Intel-Client-IP", self.client_address[0])
                         if api_only
-                        else self.client_address[0],
+                        else self.real_client(),
                     )
                 elif path in {"/auth/logout", "/auth/create-user", "/auth/password"}:
                     context = self.context()
@@ -435,6 +469,8 @@ def create_server(
                 "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; img-src 'self' https: http:; media-src 'self' https: http:; frame-src https://www.youtube-nocookie.com https://player.vimeo.com; base-uri 'none'; frame-ancestors " + frame_ancestors(),
             )
             self.send_header("X-Content-Type-Options", "nosniff")
+            if self.over_https():
+                self.send_header("Strict-Transport-Security", "max-age=31536000")
             if getattr(self, "pending_cookie", None):
                 self.send_header("Set-Cookie", self.pending_cookie)
             for key, value in (headers or {}).items():
@@ -800,11 +836,21 @@ def create_server(
             self.end_headers()
             self.wfile.write(content)
 
+        def read_upload(self, length):
+            """Uploads are held in memory, so only a couple may come in at once."""
+            if not upload_slots.acquire(blocking=False):
+                self.respond({"error": "Another upload is in progress. Try again shortly."}, status=429)
+                return None
+            try:
+                return self.rfile.read(length)
+            finally:
+                upload_slots.release()
+
         def do_POST(self):
             if not api_only and urlsplit(self.path).path == "/guest/prepare":
                 from .guest_routes import prepare_guest
 
-                result, status = prepare_guest(self.headers, self.rfile)
+                result, status = prepare_guest(self.headers, self.rfile, self.real_client())
                 self.respond(result, status=status)
                 return
             if not self.service_authorized():
@@ -847,7 +893,9 @@ def create_server(
                         from .media_import import import_file
                         from urllib.parse import unquote
 
-                        payload = self.rfile.read(length)
+                        payload = self.read_upload(length)
+                        if payload is None:
+                            return
                         if len(payload) != length:
                             raise ValueError("Incomplete upload")
                         filename = unquote(self.headers.get("X-Filename", ""))
@@ -858,7 +906,9 @@ def create_server(
                     if self.path == "/api/pdf-upload":
                         from .discovery import import_pdf_upload
 
-                        payload = self.rfile.read(length)
+                        payload = self.read_upload(length)
+                        if payload is None:
+                            return
                         if len(payload) != length:
                             raise ValueError("Incomplete PDF upload")
                         with discovery_lock:
@@ -1050,7 +1100,7 @@ def create_server(
             self.send_header("Content-Length", "0")
             self.end_headers()
 
-    return ThreadingHTTPServer((host, port), Handler)
+    return BoundedHTTPServer((host, port), Handler)
 
 
 def main():

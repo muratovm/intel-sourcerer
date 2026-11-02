@@ -1,0 +1,19 @@
+# For a public server, behind an HTTPS reverse proxy:
+#   INTEL_TRUSTED_PROXIES=172.18.0.1 docker compose -f compose.yaml -f compose.public.yaml up --build -d --wait
+# INTEL_TRUSTED_PROXIES is your proxy's address as the container sees it; see docs/hosting.md.
+services:
+  backend:
+    environment:
+      INTEL_SECURE_COOKIES: "1"
+      INTEL_TRUSTED_PROXIES: ${INTEL_TRUSTED_PROXIES:?Set this to your reverse proxy's address}
+      INTEL_SETUP_TOKEN: ${INTEL_SETUP_TOKEN:-}
+      INTEL_GUEST: ${INTEL_GUEST:-off}
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    pids_limit: 256
