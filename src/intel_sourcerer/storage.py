@@ -90,6 +90,27 @@ def connect_database(path):
       article_url TEXT PRIMARY KEY REFERENCES articles(url),
       fraction REAL NOT NULL, updated_at TEXT NOT NULL
     );""")
+    # Rebuilt from article text on demand. Triggers keep it honest for every path that writes articles.
+    db.executescript("""CREATE TABLE IF NOT EXISTS article_indicators (
+      article_url TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL,
+      PRIMARY KEY(article_url,kind,value)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS article_indicators_value ON article_indicators(kind,value);
+    CREATE TABLE IF NOT EXISTS indicator_index_state (
+      article_url TEXT PRIMARY KEY, version INTEGER NOT NULL
+    );
+    CREATE TRIGGER IF NOT EXISTS article_body_changed AFTER UPDATE OF content_html,content_markdown,content_text ON articles
+      WHEN NEW.content_html IS NOT OLD.content_html OR NEW.content_markdown IS NOT OLD.content_markdown OR NEW.content_text IS NOT OLD.content_text
+      BEGIN
+        DELETE FROM article_indicators WHERE article_url=NEW.url;
+        DELETE FROM indicator_index_state WHERE article_url=NEW.url;
+      END;
+    CREATE TRIGGER IF NOT EXISTS article_removed AFTER DELETE ON articles
+      BEGIN
+        DELETE FROM article_indicators WHERE article_url=OLD.url;
+        DELETE FROM indicator_index_state WHERE article_url=OLD.url;
+      END;
+    """)
     db.commit()
     return db
 

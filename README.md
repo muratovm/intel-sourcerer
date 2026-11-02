@@ -187,6 +187,8 @@ The reader's **IOCs** panel lists what it finds in the article text, each group 
 
 Markdown exports include an Indicators section. Everything is found by pattern with no network lookups, so check values in context: a mention isn't a finding, and a hash-shaped value may not be a file hash. Copy all copies IDs without names.
 
+**Related reports** links articles in your library that share indicators. A report is listed when it shares a hash, CVE, or file name, or at least three ATT&CK techniques. Reports from other publishers come first, since they corroborate rather than repeat, then the strongest evidence. Each value in the IOCs panel also shows how many other reports mention it (for example `+3`), and selecting that lists them. Everyday tools are left out of matching. A shared value means two reports mention the same thing, not that they describe the same activity, and newsletters that repeat a table will link to each other. The index lives in your database, is built the first time you open an article, and updates itself when articles change.
+
 The names come from a bundled lookup that doesn't update itself. After MITRE publishes a new version, rebuild it and restart the server:
 
 ```sh

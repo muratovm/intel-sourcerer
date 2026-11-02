@@ -762,6 +762,14 @@ def create_server(
                                     "week": week_counts(db),
                                 }
                             )
+                        elif path == "/api/related":
+                            from .correlation import related_reports
+
+                            url = parse_qs(urlsplit(self.path).query).get("url", [""])[0]
+                            if not db.execute("SELECT 1 FROM articles WHERE url=?", (url,)).fetchone():
+                                self.respond({"error": "Article not found"}, status=404)
+                                return
+                            self.respond(related_reports(db, url))
                         elif path == "/api/article":
                             url = parse_qs(urlsplit(self.path).query).get("url", [""])[
                                 0

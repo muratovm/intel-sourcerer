@@ -784,6 +784,7 @@ async function renderQueue() {
   window.renderArticleMath?.();
   renderHighlights();
   renderIOCs();
+  loadRelated(article);
   const next = q.items[q.cursor + 1];
   document
     .querySelectorAll(".position")
@@ -1221,7 +1222,91 @@ function jumpToText(value) {
   }
   notice("That value isn't shown as plain text in this article.");
 }
-function iocGroup(title, items, label) {
+function reportLink(report) {
+  const link = document.createElement("a"),
+    title = document.createElement("span"),
+    meta = document.createElement("span");
+  link.className = "related-report";
+  link.href = "/?" + new URLSearchParams({ open: report.url });
+  title.className = "related-title";
+  title.textContent = report.title;
+  meta.className = "muted";
+  meta.textContent = `${report.publisher} · ${dateLabel(report.published_at)}`;
+  link.append(title, meta);
+  return link;
+}
+function sharedSummary(shared) {
+  const parts = [
+    ...shared.hashes.map((value) => `${value.slice(0, 12)}…`),
+    ...shared.cves,
+    ...shared.files,
+    ...shared.techniques,
+  ];
+  return parts.slice(0, 4).join(", ") + (parts.length > 4 ? ` and ${parts.length - 4} more` : "");
+}
+function addAlsoInButton(row, reports) {
+  const button = document.createElement("button"),
+    list = document.createElement("ul"),
+    label = `In ${reports.length} other ${reports.length === 1 ? "report" : "reports"}`;
+  button.type = "button";
+  button.className = "ioc-also-in";
+  button.textContent = `+${reports.length}`;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-expanded", "false");
+  list.className = "ioc-also-list";
+  list.hidden = true;
+  for (const report of reports) {
+    const item = document.createElement("li");
+    item.append(reportLink(report));
+    list.append(item);
+  }
+  button.onclick = () => {
+    list.hidden = !list.hidden;
+    button.setAttribute("aria-expanded", String(!list.hidden));
+  };
+  row.append(button, list);
+}
+function renderRelated(data) {
+  const byURL = new Map(data.reports.map((report) => [report.url, report])),
+    related = data.related.map((url) => byURL.get(url));
+  $("related-list").replaceChildren(
+    ...related.map((report) => {
+      const row = document.createElement("li"),
+        shared = document.createElement("span");
+      shared.className = "related-shared";
+      shared.textContent = sharedSummary(report.shared);
+      row.append(reportLink(report), shared);
+      return row;
+    }),
+  );
+  $("related-count").textContent = related.length ? `· ${related.length}` : "";
+  $("related-panel").hidden = !related.length && data.complete;
+  $("related-status").textContent = data.complete
+    ? "Reports in your library that share a hash, CVE, or file name with this one, or at least three ATT&CK techniques."
+    : "Still reading the rest of your library, so more may appear.";
+  for (const row of document.querySelectorAll("#iocs-groups li[data-kind]")) {
+    row.querySelectorAll(".ioc-also-in, .ioc-also-list").forEach((item) => item.remove());
+    const urls = data.values[row.dataset.kind]?.[row.dataset.key];
+    if (urls) addAlsoInButton(row, urls.map((url) => byURL.get(url)));
+  }
+}
+// Separate from the article request, because a first visit may have a whole library to read.
+async function loadRelated(article) {
+  $("related-panel").hidden = true;
+  $("related-panel").open = false;
+  try {
+    while (currentArticle === article) {
+      const data = await api("/api/related?" + new URLSearchParams({ url: article.url }));
+      if (currentArticle !== article) return;
+      renderRelated(data);
+      if (data.complete) return;
+    }
+  } catch {
+    // The article is still readable without this, including offline and in temporary sessions.
+  }
+}
+function iocGroup(title, items, label, kind) {
   const group = document.createElement("section"),
     heading = document.createElement("div"),
     name = document.createElement("h3"),
@@ -1250,6 +1335,10 @@ function iocGroup(title, items, label) {
     value.setAttribute("aria-label", `Find ${item.value}${item.name ? ", " + item.name + "," : ""} in the article`);
     value.onclick = () => jumpToText(item.value);
     row.append(value);
+    if (kind) {
+      row.dataset.kind = kind;
+      row.dataset.key = kind === "files" ? item.value.toLowerCase() : item.value;
+    }
     list.append(row);
   }
   group.append(heading, list);
@@ -1264,10 +1353,10 @@ function renderIOCs() {
     samples = files.filter((item) => !item.common),
     common = files.filter((item) => item.common),
     groups = [];
-  if (cves.length) groups.push(iocGroup("CVEs", cves));
-  if (techniques.length) groups.push(iocGroup("MITRE ATT&CK", techniques));
-  if (hashes.length) groups.push(iocGroup("File hashes", hashes, (item) => item.type));
-  if (samples.length) groups.push(iocGroup("File names", samples));
+  if (cves.length) groups.push(iocGroup("CVEs", cves, null, "cves"));
+  if (techniques.length) groups.push(iocGroup("MITRE ATT&CK", techniques, null, "techniques"));
+  if (hashes.length) groups.push(iocGroup("File hashes", hashes, (item) => item.type, "hashes"));
+  if (samples.length) groups.push(iocGroup("File names", samples, null, "files"));
   if (common.length) groups.push(iocGroup("Common tools and files", common));
   $("iocs-groups").replaceChildren(...groups);
   $("iocs-panel").hidden = !groups.length;
