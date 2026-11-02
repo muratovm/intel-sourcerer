@@ -31,7 +31,7 @@ from .reading_state import (
     set_triage,
     week_counts,
 )
-from .storage import connect_database
+from .storage import BUSY_TIMEOUT, connect_database
 from .sessions import (
     session_db,
     queue_state,
@@ -112,7 +112,7 @@ def frame_ancestors():
 def read_articles(database):
     """Open the existing database read-only; never create an empty replacement."""
     uri = Path(database).resolve().as_uri() + "?mode=ro"
-    with closing(sqlite3.connect(uri, uri=True)) as db, db:
+    with closing(sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT)) as db, db:
         db.row_factory = sqlite3.Row
         return db.execute("""SELECT a.title,a.url,a.published_at,a.content_text,a.content_markdown,a.content_html,a.is_read,a.notes,a.notes_format,a.notes_updated_at,a.content_format,a.triage,s.name AS publisher
             FROM articles a JOIN sources s ON s.id=a.source_id
@@ -1030,7 +1030,7 @@ def create_server(
                 return
             try:
                 with sqlite3.connect(
-                    Path(database).resolve().as_uri() + "?mode=rw", uri=True
+                    Path(database).resolve().as_uri() + "?mode=rw", uri=True, timeout=BUSY_TIMEOUT
                 ) as db:
                     result = db.execute(
                         "UPDATE articles SET is_read=? WHERE url=? AND source_id IN (SELECT id FROM sources WHERE enabled=1)",

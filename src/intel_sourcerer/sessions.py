@@ -7,13 +7,15 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .storage import BUSY_TIMEOUT
+
 
 class SessionError(ValueError):
     pass
 
 
 def session_db(path):
-    db = sqlite3.connect(Path(path).resolve().as_uri() + '?mode=rw', uri=True)
+    db = sqlite3.connect(Path(path).resolve().as_uri() + '?mode=rw', uri=True, timeout=BUSY_TIMEOUT)
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
     return db

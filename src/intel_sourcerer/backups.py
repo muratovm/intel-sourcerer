@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import sqlite3
 import threading
 
+from .storage import BUSY_TIMEOUT
+
 _lock=threading.Lock()
 def backup_database(database):
     path=Path(database)
@@ -13,7 +15,7 @@ def backup_database(database):
         destination.parent.mkdir(parents=True,exist_ok=True)
         temporary=destination.with_suffix('.tmp')
         try:
-            with sqlite3.connect(path) as source, sqlite3.connect(temporary) as target:
+            with sqlite3.connect(path, timeout=BUSY_TIMEOUT) as source, sqlite3.connect(temporary) as target:
                 source.backup(target)
             temporary.replace(destination)
         finally:

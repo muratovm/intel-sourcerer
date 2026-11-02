@@ -121,6 +121,8 @@ async def import_articles(config, database, since, until):
         async with httpx.AsyncClient(timeout=20,follow_redirects=True,headers={'User-Agent':'IntelSourcerer/0.1'}) as client:
             for source in sources:
                 save_source(db, source)
+                # Fetching below takes a while, and an open write would block note saves throughout.
+                db.commit()
                 candidates = {}
                 stats = {'id':source.id, 'discovered':0, 'in_window':0, 'selected':0, 'inserted':0, 'full_text':0, 'metadata_only':0, 'excluded':[]}
                 feed = source.as_feed()

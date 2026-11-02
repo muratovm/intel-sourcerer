@@ -3,10 +3,24 @@ import sqlite3
 from pathlib import Path
 
 
+# How long a write waits for another writer before giving up, in seconds.
+BUSY_TIMEOUT = 15
+
+
+def use_write_ahead_log(db):
+    """Let readers keep working during a write. The mode is stored in the file, so this sticks."""
+    try:
+        db.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError:
+        # Another connection is mid-write; the next open tries again, and the old mode still works.
+        pass
+
+
 def connect_database(path):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path)
+    db = sqlite3.connect(path, timeout=BUSY_TIMEOUT)
     db.row_factory = sqlite3.Row
+    use_write_ahead_log(db)
     db.execute("PRAGMA foreign_keys = ON")
     db.executescript('''
     CREATE TABLE IF NOT EXISTS sources (

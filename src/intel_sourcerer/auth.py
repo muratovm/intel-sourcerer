@@ -9,7 +9,7 @@ import uuid
 import re
 import shutil
 from http.cookies import SimpleCookie
-from .storage import connect_database
+from .storage import BUSY_TIMEOUT, connect_database, use_write_ahead_log
 
 
 def password_hash(password, salt):
@@ -22,12 +22,13 @@ class Accounts:
         self.original_config=Path(config).resolve()
         self.path=self.legacy.parent/'accounts.sqlite3'
         with self.transaction() as db:
+            use_write_ahead_log(db)
             db.executescript('''CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,username TEXT UNIQUE NOT NULL,salt TEXT NOT NULL,password_hash TEXT NOT NULL,admin INTEGER NOT NULL,database_path TEXT NOT NULL,config_path TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT,csrf TEXT NOT NULL,expires REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS attempts(key TEXT NOT NULL,created REAL NOT NULL);''')
 
     def connect(self):
-        db=sqlite3.connect(self.path);db.row_factory=sqlite3.Row;return db
+        db=sqlite3.connect(self.path,timeout=BUSY_TIMEOUT);db.row_factory=sqlite3.Row;return db
 
     @contextmanager
     def transaction(self):
