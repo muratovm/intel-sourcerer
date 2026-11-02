@@ -1,0 +1,12 @@
+# Only application inputs belong in the image. Excludes private data and secrets.
+**
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!src/**
+!config/
+!config/sources.toml
+**/__pycache__/
+**/*.pyc

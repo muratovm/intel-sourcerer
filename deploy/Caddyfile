@@ -1,0 +1,21 @@
+{
+	email {$ACME_EMAIL}
+	servers {
+		timeouts {
+			read_header 15s
+			read_body 30s
+			idle 60s
+		}
+	}
+}
+
+{$DOMAIN} {
+	request_body {
+		max_size 100MB
+	}
+	reverse_proxy backend:8765 {
+		transport http {
+			response_header_timeout 300s
+		}
+	}
+}

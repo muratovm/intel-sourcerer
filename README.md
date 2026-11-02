@@ -2,8 +2,42 @@
 
 A local cybersecurity reading workspace for collecting research articles, building focused reading queues, and keeping notes beside the full article.
 
-<img width="1261" height="1176" alt="image" src="https://github.com/user-attachments/assets/0df31668-9b5e-4684-b4e5-580e9c071525" />
+![The reader: an article with highlights beside notes with a callout and a checklist, with the timer in the header](docs/screenshots/reader.png)
 
+## A look around
+
+Every screenshot uses a made-up demo library: the articles, publishers, and indicators are invented.
+
+**Home:** pick up your session, find new articles, and sort what's new with Keep or Skip.
+
+![Home page with the current session, kept articles, and a triage list](docs/screenshots/home.png)
+
+**Queue builder:** filter saved articles and drag them into your queue.
+
+![Queue builder with saved articles on the left and a reading queue on the right](docs/screenshots/queue-builder.png)
+
+**Indicators:** CVEs, MITRE IDs with their names, file hashes, and file names pulled from the article, ready to copy.
+
+![IOCs panel listing a CVE, MITRE techniques, hashes, and file names beside the article](docs/screenshots/iocs.png)
+
+**Library:** search everything you've saved, with notes and highlights beside each article.
+
+![Library with an article list and a preview of notes and highlights](docs/screenshots/library.png)
+
+**Stats:** your reading year as a heatmap, with pace from timed sessions.
+
+![Stats page with a yearly reading heatmap and reading pace figures](docs/screenshots/stats.png)
+
+**Dark mode**, for long sessions.
+
+![The reader in dark mode](docs/screenshots/reader-dark.png)
+
+**On a phone:** separate Read and Notes tabs, and the app can be installed for offline reading.
+
+<p>
+  <img src="docs/screenshots/phone-read.png" width="280" alt="The reader's Read tab on a phone" />
+  <img src="docs/screenshots/phone-notes.png" width="280" alt="The reader's Notes tab on a phone" />
+</p>
 
 ## Run locally
 
@@ -55,6 +89,15 @@ INTEL_PORT=8875 docker compose up -d --wait
 Do not use `docker compose down --volumes` unless you intend to delete the saved
 Docker data. The port is published on localhost. For HTTPS or remote access, see
 [Docker hosting and backups](docs/hosting.md#docker-with-persistent-sqlite).
+
+## GitHub CI/CD and production hosting
+
+The project includes GitHub Actions for tests, Docker image publication to GHCR,
+and optional deployment to an AWS Lightsail VM. Production uses Caddy for HTTPS,
+a persistent SQLite volume, pre-deploy backups, and recovery on failed releases.
+See the [Lightsail setup guide](docs/lightsail.md) for server preparation,
+GitHub secrets, deployment activation, and backups. Deployment remains disabled
+until you configure the server and set `DEPLOY_ENABLED=true` in GitHub.
 
 ## Reading workflow
 

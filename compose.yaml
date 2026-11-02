@@ -1,0 +1,13 @@
+services:
+  backend:
+    build: .
+    ports:
+      - "127.0.0.1:${INTEL_PORT:-8775}:8765"
+    volumes:
+      - intel-data:/app/data
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+
+volumes:
+  intel-data:

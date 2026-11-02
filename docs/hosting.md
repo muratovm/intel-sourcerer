@@ -108,6 +108,11 @@ this override for local access.
 
 ## Running on the public internet
 
+For the prepared GitHub Actions → GHCR → Lightsail deployment, use the
+[production setup guide](lightsail.md). It includes a separate Compose stack
+with Caddy, consistent backups, and failed-release recovery. The manual setup
+below is useful when you already operate an HTTPS reverse proxy.
+
 Run one container on a VM with a persistent local disk, behind an HTTPS reverse
 proxy such as Caddy or nginx. SQLite needs a stable local disk and one writer, so
 avoid platforms that replace or scale containers freely, and network file shares.
