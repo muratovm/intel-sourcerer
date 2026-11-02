@@ -5,6 +5,8 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from calendar import timegm
+from email.utils import parsedate_to_datetime
+from math import ceil
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import feedparser
@@ -17,6 +19,22 @@ from .net_safety import public_only
 class FeedSource:
     name: str
     url: str
+
+
+CHALLENGE_HEADERS = ("x-vercel-mitigated", "cf-mitigated", "x-amzn-waf-action")
+# Longest Retry-After worth holding a request open for. Anything longer waits for a later run.
+MAX_RETRY_WAIT = 15
+BOT_CHECK_PAUSE = 6 * 3600
+RATE_LIMIT_PAUSE = 3600
+MAX_PAUSE = 24 * 3600
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """A site saying not to ask right now, with how long to leave it alone."""
+    message: str
+    pause_seconds: int
+    retry_wait: int | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +65,55 @@ class FeedResult:
     not_modified: bool = False
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
+    refusal: Refusal | None = None
+
+
+class Refused(Exception):
+    def __init__(self, refusal: Refusal):
+        super().__init__(refusal.message)
+        self.refusal = refusal
+
+
+def retry_after_seconds(value: str | None, now: datetime | None = None) -> int | None:
+    """Retry-After is either a number of seconds or an HTTP date."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return int(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0, ceil((when - (now or datetime.now(timezone.utc))).total_seconds()))
+
+
+def refusal_from(response: httpx.Response) -> Refusal | None:
+    """Tell a site's refusal apart from an ordinary failure. A challenge won't clear by retrying."""
+    if any(response.headers.get(header, "").lower() == "challenge" for header in CHALLENGE_HEADERS):
+        return Refusal("blocked by the site's bot check", BOT_CHECK_PAUSE)
+    wait = retry_after_seconds(response.headers.get("retry-after"))
+    # A 503 without Retry-After is just an outage, which the next run can try again.
+    if response.status_code == 429 or (response.status_code == 503 and wait is not None):
+        pause = min(MAX_PAUSE, max(wait or RATE_LIMIT_PAUSE, 60))
+        return Refusal("rate limited by the site", pause, wait if wait is not None and wait <= MAX_RETRY_WAIT else None)
+    return None
+
+
+async def polite_get(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    """GET once, and once more only if the site named a short wait."""
+    response = await client.get(url)
+    refused = refusal_from(response)
+    if refused and refused.retry_wait is not None:
+        await asyncio.sleep(refused.retry_wait)
+        response = await client.get(url)
+        refused = refusal_from(response)
+    if refused:
+        raise Refused(refused)
+    response.raise_for_status()
+    return response
 
 
 def _web_url(value: str, base: str) -> str | None:
@@ -118,19 +185,31 @@ async def fetch_feed(
     if previous.last_modified:
         headers["If-Modified-Since"] = previous.last_modified
     try:
-        async with client.stream("GET", source.url, headers=headers, follow_redirects=True, timeout=20) as response:
-            if response.status_code == 304:
-                result.not_modified = True
-                result.cache = FeedCache(response.headers.get("etag", previous.etag), response.headers.get("last-modified", previous.last_modified))
-                return result
-            response.raise_for_status()
-            body = bytearray()
-            async for chunk in response.aiter_bytes():
-                if len(body) + len(chunk) > max_bytes:
-                    raise ValueError(f"Feed exceeds {max_bytes} bytes")
-                body.extend(chunk)
-            result.articles, result.warnings = await asyncio.to_thread(parse_feed, bytes(body), source, base_url=str(response.url))
-            result.cache = FeedCache(response.headers.get("etag"), response.headers.get("last-modified"))
+        for attempt in range(2):
+            wait = None
+            async with client.stream("GET", source.url, headers=headers, follow_redirects=True, timeout=20) as response:
+                if response.status_code == 304:
+                    result.not_modified = True
+                    result.cache = FeedCache(response.headers.get("etag", previous.etag), response.headers.get("last-modified", previous.last_modified))
+                    return result
+                refused = refusal_from(response)
+                if refused and refused.retry_wait is not None and attempt == 0:
+                    wait = refused.retry_wait
+                elif refused:
+                    result.refusal = refused
+                    result.error = refused.message
+                    return result
+                else:
+                    response.raise_for_status()
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        if len(body) + len(chunk) > max_bytes:
+                            raise ValueError(f"Feed exceeds {max_bytes} bytes")
+                        body.extend(chunk)
+                    result.articles, result.warnings = await asyncio.to_thread(parse_feed, bytes(body), source, base_url=str(response.url))
+                    result.cache = FeedCache(response.headers.get("etag"), response.headers.get("last-modified"))
+                    return result
+            await asyncio.sleep(wait)
     except (httpx.HTTPError, ValueError) as exc:
         result.error = str(exc)
     return result

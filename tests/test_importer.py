@@ -69,7 +69,7 @@ def test_import_attempts_every_enabled_source_type(tmp_path,monkeypatch):
     sources=[PublisherSource('vendor','Vendor','https://example.com','security_vendor','https://example.com/rss'),PublisherSource('unsupported','Other','https://example.com','government'),PublisherSource('disabled','Disabled','https://example.com','ai_lab',enabled=False)]
     monkeypatch.setattr(importer,'load_sources',lambda _:sources)
     calls=[]
-    async def fetch(client,feed):
+    async def fetch(client,feed,cache=None):
         calls.append(feed.name)
         return FeedResult(feed,[])
     monkeypatch.setattr(importer,'fetch_feed',fetch)

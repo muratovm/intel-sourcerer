@@ -128,6 +128,12 @@ uv run intel-sourcerer-import --since 2026-09-01
 
 Cybersecurity relevance and article-type labels use keyword rules, not AI classification. They can miss articles or assign broad labels. Manual links bypass relevance filtering. If a manual page has no publication date, its import date is used. Adding an already saved manual URL preserves its existing copy.
 
+### When a site refuses
+
+Finding articles keeps requests low: feeds are read with ETags, so an unchanged feed costs almost nothing, and text that's already saved isn't fetched again. If a site sends a short `Retry-After`, the request waits and tries once more. A longer one, or a 429 with no wait, pauses that source for as long as the site asks, or an hour if it doesn't say.
+
+A bot check is different. It's reported as blocked rather than rate limited, and the source is paused for 6 hours, because retrying doesn't help. The app doesn't try to get past these checks. To read a blocked article, save it from your browser as a PDF and upload it. Other sources keep working throughout, and paused ones are named in the results.
+
 ## Saved articles and media
 
 Articles are stored as sanitized HTML, which the reader displays, plus Markdown for export and older entries. Code, regex, tables, and math (rendered with KaTeX) survive as written, and PDFs keep their links, bullets, and code lines. Blog header images can be captured from Open Graph/Twitter metadata. Multi-section reports use the enclosing main content when it contains several separate article sections.

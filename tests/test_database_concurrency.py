@@ -119,7 +119,7 @@ def test_fetching_during_import_leaves_notes_free_to_save(path, monkeypatch):
     source = PublisherSource('s', 'S', 'http://x', 'ai_lab', 'http://x/feed')
     seen = []
 
-    async def fetch(_client, feed):
+    async def fetch(_client, feed, cache=None):
         # A note save during a network call must not have to wait for the import.
         db = session_db(path)
         db.execute('PRAGMA busy_timeout=0')

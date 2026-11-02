@@ -2,8 +2,9 @@
 import argparse
 import asyncio
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
+from math import ceil
 from pathlib import Path
 import re
 from urllib.parse import urljoin, urlsplit
@@ -17,12 +18,33 @@ import trafilatura
 
 from .content import extract_article
 from .config import load_sources
-from .feeds import Article, fetch_feed
+from .feeds import Article, FeedCache, Refused, fetch_feed, polite_get
 from .storage import connect_database, save_article, save_source
 
 TERMS = re.compile(r"cyber|distillation|malicious|misuse|espionage|phishing|ransomware|vulnerabilit|prompt injection|hacking|frontier safeguards", re.I)
 # Everything these teams publish is in scope, so no keyword has to match.
 ALWAYS_RELEVANT_SOURCES = {'anthropic-frontier-red-team'}
+
+
+def try_again_label(seconds):
+    if seconds < 3600:
+        return 'Trying again within the hour.'
+    hours = ceil(seconds / 3600)
+    return f"Trying again in about {hours} hour{'s' if hours != 1 else ''}."
+
+
+def fetch_state(db, source_id):
+    row = db.execute('SELECT * FROM source_fetch_state WHERE source_id=?', (source_id,)).fetchone()
+    return dict(row) if row else {'etag': None, 'last_modified': None, 'covered_since': None, 'paused_until': None, 'pause_reason': None}
+
+
+def save_fetch_state(db, source_id, **changes):
+    columns = ','.join(changes)
+    db.execute(
+        f"INSERT INTO source_fetch_state (source_id,{columns}) VALUES (?,{','.join('?' * len(changes))}) "
+        f"ON CONFLICT(source_id) DO UPDATE SET {','.join(f'{column}=excluded.{column}' for column in changes)}",
+        (source_id, *changes.values()),
+    )
 
 
 def in_window(article, since, until):
@@ -116,7 +138,7 @@ async def import_articles(config, database, since, until):
     if since >= until:
         raise ValueError('since must precede until')
     sources = [s for s in load_sources(config) if s.enabled]
-    report = {'since':since.isoformat(), 'until':until.isoformat(), 'sources':[], 'errors':[]}
+    report = {'since':since.isoformat(), 'until':until.isoformat(), 'sources':[], 'errors':[], 'paused':[]}
     db = connect_database(database)
     started = datetime.now(timezone.utc).isoformat()
     try:
@@ -127,11 +149,23 @@ async def import_articles(config, database, since, until):
                 # Fetching below takes a while, and an open write would block note saves throughout.
                 db.commit()
                 candidates = {}
-                stats = {'id':source.id, 'discovered':0, 'in_window':0, 'selected':0, 'inserted':0, 'full_text':0, 'metadata_only':0, 'excluded':[]}
+                stats = {'id':source.id, 'discovered':0, 'in_window':0, 'selected':0, 'inserted':0, 'full_text':0, 'already_saved':0, 'metadata_only':0, 'excluded':[]}
+                state = fetch_state(db, source.id)
+                now = datetime.now(timezone.utc)
+                if state['paused_until'] and datetime.fromisoformat(state['paused_until']) > now:
+                    wait = (datetime.fromisoformat(state['paused_until']) - now).total_seconds()
+                    report['paused'].append(f"{source.name}: {state['pause_reason']}. {try_again_label(wait)}")
+                    report['sources'].append(stats)
+                    continue
+                refused = None
                 feed = source.as_feed()
+                result = None
                 if feed:
-                    result = await fetch_feed(client, feed)
-                    if result.error: report['errors'].append(f'{source.id}: {result.error}')
+                    # A 304 only covers what the last full read covered, so a wider window reads the feed again.
+                    covered = state['covered_since'] and datetime.fromisoformat(state['covered_since']) <= since
+                    result = await fetch_feed(client, feed, FeedCache(state['etag'], state['last_modified']) if covered else None)
+                    refused = result.refusal
+                    if result.error and not refused: report['errors'].append(f'{source.id}: {result.error}')
                     candidates.update({a.url:a for a in result.articles})
                 elif source.id in {'anthropic', 'anthropic-frontier-red-team'}:
                     indexes = [source.parent_url]
@@ -139,11 +173,13 @@ async def import_articles(config, database, since, until):
                         indexes.append('https://www.anthropic.com/news')
                     for index in indexes:
                         try:
-                            response = await client.get(index)
-                            response.raise_for_status()
+                            response = await polite_get(client, index)
                             found = listing_articles(response.text,source,str(response.url))
                             if not found:report['errors'].append(f'{source.id}: no dated article cards parsed at {index}')
                             candidates.update({a.url:a for a in found})
+                        except Refused as exc:
+                            refused = exc.refusal
+                            break
                         except httpx.HTTPError as exc:
                             report['errors'].append(f'{source.id}: {index}: {exc}')
                 else:
@@ -157,23 +193,46 @@ async def import_articles(config, database, since, until):
                     reason = selection_reason(article, source)
                     if reason: selected.append((article,reason))
                     else:stats['excluded'].append(article.title)
+                # Text already saved isn't fetched again. Failed ones stay out of this set, so they get another try.
+                saved={row[0] for row in db.execute("SELECT url FROM articles WHERE source_id=? AND content_status='full_text' AND content_html IS NOT NULL",(source.id,))}
                 gate=asyncio.Semaphore(4)
+                refusals=[]
                 async def extract(item):
                     article,reason=item
+                    if article.url in saved:return article,reason,None,None,None,[],None
                     async with gate:
+                        # One refusal speaks for the site, so the rest of the batch leaves it alone.
+                        if refusals:return article,reason,None,refusals[0].message,None,[],None
                         try:
-                            response=await client.get(article.url)
-                            response.raise_for_status()
+                            response=await polite_get(client,article.url)
                             content=await asyncio.to_thread(trafilatura.extract,response.text,include_comments=False,include_tables=True)
                             if not content:return article,reason,None,'No readable article text extracted',None,[],None
                             clean_html,markdown,media=await asyncio.to_thread(extract_article,response.text,str(response.url))
                             return article,reason,content,None,markdown,media,clean_html
+                        except Refused as exc:
+                            refusals.append(exc.refusal)
+                            return article,reason,None,exc.refusal.message,None,[],None
                         except httpx.HTTPError as exc:
                             return article,reason,None,str(exc),None,[],None
-                for article,reason,content,error,markdown,media,clean_html in await asyncio.gather(*(extract(i) for i in selected)):
+                extracted=await asyncio.gather(*(extract(i) for i in selected))
+                refused=refused or next(iter(refusals),None)
+                for article,reason,content,error,markdown,media,clean_html in extracted:
                     stats['selected']+=1
                     stats['inserted']+=save_article(db,source.id,article,content=content,error=error,reason=reason,discovered_at=started,markdown=markdown,media=media,html=clean_html)
-                    stats['full_text' if content else 'metadata_only']+=1
+                    stats['already_saved' if article.url in saved else 'full_text' if content else 'metadata_only']+=1
+                if refused:
+                    until=datetime.now(timezone.utc)+timedelta(seconds=refused.pause_seconds)
+                    save_fetch_state(db,source.id,paused_until=until.isoformat(),pause_reason=refused.message)
+                    report['errors'].append(f'{source.name}: {refused.message}. {try_again_label(refused.pause_seconds)}')
+                elif result and not result.error:
+                    failed=any(error for _,_,_,error,*_ in extracted)
+                    if result.not_modified:
+                        save_fetch_state(db,source.id,paused_until=None,pause_reason=None)
+                    else:
+                        # Forgetting the validators after a failure means the next run sees those articles again.
+                        save_fetch_state(db,source.id,etag=None if failed else result.cache.etag,last_modified=None if failed else result.cache.last_modified,covered_since=None if failed else since.isoformat(),paused_until=None,pause_reason=None)
+                elif not result:
+                    save_fetch_state(db,source.id,paused_until=None,pause_reason=None)
                 report['sources'].append(stats)
                 db.commit()
         db.execute('INSERT INTO import_runs(started_at,since,until,report_json) VALUES (?,?,?,?)', (started,since.isoformat(),until.isoformat(),json.dumps(report)))

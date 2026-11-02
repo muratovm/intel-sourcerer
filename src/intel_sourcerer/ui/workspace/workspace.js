@@ -352,7 +352,7 @@ $("home-find").onclick = async () => {
       added ? `${added} new ${added === 1 ? "article" : "articles"} added to To triage.` : "No new articles.",
     );
     if (report.errors.length) status.append(" Some ", sourcesLink("sources"), " had problems.");
-    if (report.errors.length) notice(report.errors.join(" · "));
+    if (report.errors.length || report.paused.length) notice([...report.errors, ...report.paused].join(" · "));
   } catch (error) {
     status.textContent = "Couldn't check for new articles. Your saved articles are still here.";
     notice(error.message);
@@ -595,7 +595,7 @@ $("discovery-form").onsubmit = async (event) => {
     $("discovery-status").textContent = report.errors.length
       ? "Updated with some source issues. Saved results are available."
       : "Updated just now · newest first";
-    if (report.errors.length) notice(report.errors.join(" · "));
+    if (report.errors.length || report.paused.length) notice([...report.errors, ...report.paused].join(" · "));
   } catch (error) {
     $("discovery-status").textContent =
       "Could not refresh. Saved articles remain available.";

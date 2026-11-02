@@ -14,7 +14,7 @@ import trafilatura
 from .content import extract_article
 from .pdf_content import extract_pdf
 from .config import PublisherSource
-from .feeds import Article
+from .feeds import Article, refusal_from
 from .storage import connect_database, save_source, save_article
 
 
@@ -98,6 +98,8 @@ async def import_link(database, url):
                                 url=urljoin(url,response.headers.get('location',''));continue
                             if response.status_code in {401,403,429} and (urlsplit(url).hostname or '').removeprefix('www.') in {'x.com','twitter.com','linkedin.com','bsky.app','mastodon.social','reddit.com'}:
                                 return save_item(database,url,'Social post',f'This platform restricts automated access. Saved as a bookmark.\n\n[Open original post]({url})','social',urlsplit(url).hostname)
+                            refused=refusal_from(response)
+                            if refused:raise ValueError(f'This article was {refused.message}. Open it in your browser, save it as a PDF, and upload that.')
                             response.raise_for_status()
                             content_type=response.headers.get('content-type','').lower()
                             chunks=[];size=0

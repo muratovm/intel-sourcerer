@@ -90,6 +90,10 @@ def connect_database(path):
       article_url TEXT PRIMARY KEY REFERENCES articles(url),
       fraction REAL NOT NULL, updated_at TEXT NOT NULL
     );""")
+    db.executescript("""CREATE TABLE IF NOT EXISTS source_fetch_state (
+      source_id TEXT PRIMARY KEY, etag TEXT, last_modified TEXT, covered_since TEXT,
+      paused_until TEXT, pause_reason TEXT
+    );""")
     # Rebuilt from article text on demand. Triggers keep it honest for every path that writes articles.
     db.executescript("""CREATE TABLE IF NOT EXISTS article_indicators (
       article_url TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL,
