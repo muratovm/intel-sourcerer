@@ -16,13 +16,14 @@ TAIL_LABELS = {
     'read next', 'keep reading', 'more from this author', 'more articles', 'more posts',
     'more stories', 'latest posts', 'latest articles', 'explore', 'featured research',
 }
+TAIL_PATTERN = re.compile(r'^((explore|discover|read|see) more\b.{0,30}(blogs?|posts?|articles?|stories|resources)|(get|sign up|subscribe)\b.{0,50}(inbox|newsletter|updates))$')
 # These sit anywhere: the label plus the list or short lines straight after it.
 SECTION_LABELS = {
     'tags', 'tagged', 'tagged with', 'topics', 'related topics', 'popular topics',
     'categories', 'category', 'posted in', 'filed under', 'share', 'share this',
     'share this post', 'share this article', 'share on', 'follow', 'follow us',
     'content types', 'products and services', 'threats intelligence', 'related products',
-    'table of contents',
+    'table of contents', 'contents', 'on this page', 'in this article', 'in this post',
 }
 # Real names are worth keeping; only a one-word organisation credit is noise.
 AUTHOR_LABELS = {'author', 'authors'}
@@ -38,6 +39,12 @@ KEEP_LINK = re.compile(r'^(read|download|watch|see|view|get)\b', re.I)
 AUTHOR_CARD_LINK = re.compile(r'^see (all )?posts by this author$', re.I)
 CARD_META = re.compile(r'\b\d+[- ]min(ute)?s?[- ]read\b', re.I)
 NEXT_ARTICLE = re.compile(r'\bNext:\s', re.I)
+FEEDBACK = re.compile(r'^(was|is|did|how)\b.{0,30}\b(useful|helpful)$')
+CRUMB_SEPARATOR = ('>', '/', '›', '»')
+# Class and id names sites use for what surrounds an article, whole words only so "shared" isn't "share".
+FURNITURE_NAME = re.compile(r'(^|[-_])(breadcrumbs?|sidebar|suggested[-_]content|related[-_](posts?|articles?|content|blogs?|stories)|more[-_]blogs|newsletter|cta[-_]module|social[-_]share|share[-_]buttons|feedback)($|[-_])', re.I)
+# A named block this big, or holding real writing, is the article itself or a callout in it.
+MAX_FURNITURE_SHARE = 0.3
 LANGUAGES = {'english', 'español', 'espanol', 'français', 'deutsch', 'português', 'italiano', '中文', '日本語', '한국어', 'русский', 'العربية'}
 # Above this share, the rules have likely misread the page, so it stays as it was.
 MAX_REMOVED = 0.5
@@ -153,13 +160,19 @@ def _mark_sections(blocks, doomed):
             following = blocks[index + 1] if index + 1 < total else None
             if following is not None and len(_text(following).split()) == 1 and not _level(following):
                 doomed.update((index, index + 1))
+        elif FEEDBACK.match(label):
+            # A prompt and its answer buttons, which may each carry an icon.
+            end = index + 1
+            while end < total and (_placeholder(blocks[end]) or len(_text(blocks[end])) <= 30) and not _level(blocks[end]):
+                end += 1
+            doomed.update(range(index, end))
         elif label in SECTION_LABELS:
             end = _section_end(blocks, index)
             # A label followed by prose is a real section that happens to share the word.
             if end == index + 1 and end < total and not _level(blocks[end]) and _label(blocks[end]) not in KEEP_LABELS:
                 continue
             doomed.update(range(index, end))
-        elif label in TAIL_LABELS:
+        elif label in TAIL_LABELS or TAIL_PATTERN.match(label):
             end = index
             while end < total and _label(blocks[end]) not in KEEP_LABELS:
                 end += 1
@@ -172,6 +185,19 @@ def _mark_sections(blocks, doomed):
                 doomed.update(range(index, end))
                 if end < total and SITE_LINK.match(_text(blocks[end])):
                     doomed.add(end)
+
+
+def _mark_above_title(blocks, doomed):
+    """A site name or category above the title. A date or byline there stays, since it says something."""
+    title = next((i for i, node in enumerate(blocks) if getattr(node, 'name', None) == 'h1'), None)
+    if title is None or title > 4:
+        return
+    lines = [i for i in range(title) if i not in doomed and getattr(blocks[i], 'name', None) == 'p']
+    for index in lines:
+        text = _text(blocks[index])
+        if len(text) > 40 or re.search(r'\d', text) or re.match(r'^by\b', text, re.I):
+            return
+    doomed.update(lines)
 
 
 def _mark_lines(blocks, doomed):
@@ -193,6 +219,14 @@ def _mark_lines(blocks, doomed):
                 end += 1
             doomed.update(range(index, end))
         elif len(text) <= 200 and node.name in {'p', 'div'} and INLINE_TAG_LINE.match(text):
+            doomed.add(index)
+        elif node.name == 'p' and text.casefold() == 'home' and _link_only(node) and index + 1 < len(blocks) and _text(blocks[index + 1]).startswith(CRUMB_SEPARATOR):
+            # Breadcrumbs: each step can land in its own block once the layout is flattened.
+            end = index + 1
+            while end < len(blocks) and _text(blocks[end]).startswith(CRUMB_SEPARATOR) and len(_text(blocks[end])) <= 200:
+                end += 1
+            doomed.update(range(index, end))
+        elif node.name == 'p' and index >= len(blocks) / 2 and len(text) <= 1500 and re.match(r'^disclaimer\s*:', text, re.I):
             doomed.add(index)
         elif len(text) <= 60 and set(text.casefold().split()) <= LANGUAGES:
             doomed.add(index)
@@ -256,6 +290,23 @@ def _mark_trailing(blocks, doomed):
         index -= 1
 
 
+def _is_furniture_element(tag, all_chars):
+    names = [*tag.get('class', []), tag.get('id') or '']
+    if not any(FURNITURE_NAME.search(name) for name in names):
+        return False
+    if len(_text(tag)) > all_chars * MAX_FURNITURE_SHARE or tag.find(['h1', 'pre']):
+        return False
+    return not any(len(_text(block)) >= LONG_PARAGRAPH for block in tag.find_all(['p', 'li', 'blockquote', 'td', 'div']) if not block.find(['p', 'li', 'blockquote', 'td', 'div']))
+
+
+def strip_named_furniture(root):
+    """Remove blocks the page itself labels as furniture, while those labels still exist."""
+    all_chars = len(_text(root))
+    for tag in root.find_all(True):
+        if not tag.decomposed and _is_furniture_element(tag, all_chars):
+            tag.decompose()
+
+
 def strip_boilerplate(soup):
     """Remove furniture in place and return the text removed, block by block."""
     root = soup
@@ -270,6 +321,8 @@ def strip_boilerplate(soup):
     _mark_sections(blocks, doomed)
     _mark_lines(blocks, doomed)
     _mark_cards(blocks, doomed)
+    # After the other rules, so a promo already marked above the title doesn't protect what's left.
+    _mark_above_title(blocks, doomed)
     # Second pass: tag lists can sit just above an author section that has now gone.
     _mark_trailing(blocks, doomed)
     # Footnotes keep their place; furniture just above them still goes.

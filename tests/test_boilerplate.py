@@ -2,6 +2,7 @@ import pytest
 from bs4 import BeautifulSoup
 
 from intel_sourcerer.boilerplate import strip_boilerplate
+from intel_sourcerer.content import extract_article
 
 BODY = ''.join(f'<p>{word} paragraph with enough real sentence text in it to count as a proper piece of the article body, well past the two hundred character mark that separates prose from page furniture on these sites, every time.</p>' for word in ('First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth'))
 
@@ -224,3 +225,60 @@ def test_reclean_fixes_saved_titles_and_dry_run_does_not(tmp_path):
     db.close()
     assert len(reclean(path)['titles']) == 1
     assert reclean(path)['titles'] == []
+
+
+ZSCALER_LIKE = """<html><body><main><div class="node-blog">
+<div class="light_hero_module_root__Fi1if"><div>Site Blog</div><div>Get the latest site blog updates in your inbox now</div><div><a href="#x">Subscribe</a></div></div>
+<div class="post_header"><div><a href="/c">Category Name</a></div><h1>The real article title goes here</h1>
+<div>A. AUTHOR</div><div>January 16, 2024 - 7 min read</div></div>
+<div class="bg-white"><div><a href="/">Home</a></div><div>&gt; <a href="/blogs">Blogs</a></div><div>&gt; The real article title goes here</div></div>
+<div class="sidebar_root__T6sub"><div>A topic</div><div>Contents</div><ol><li><a href="#a">Introduction</a></li></ol></div>
+<div class="body">""" + BODY + """<pre><code>rundll32.exe file.dll,Run</code></pre></div>
+<div class="validation_module_root__ITsuU gtm-blog-feedback"><div>Thank you for reading</div><h2>Was this post useful?</h2><div>Yes, very!</div></div>
+<div class="wysiwyg"><p>Disclaimer: This blog post is informational only and carries no warranty of any kind.</p></div>
+<div id="more-blogs" class="paragraph-suggested-content"><h2>Explore more site blogs</h2><div><a href="/x">Another post</a></div><div><a href="/x">Read post</a></div></div>
+<div id="latest" class="cta_module_root__YvskB"><h2>Get the latest blog updates in your inbox</h2><div>By submitting the form, you agree.</div></div>
+</div></main></body></html>"""
+
+
+@pytest.mark.parametrize('remaining', ['Site Blog', 'Category Name', 'Blogs', 'Contents', 'Introduction', 'Thank you for reading', 'useful', 'Disclaimer', 'Explore more', 'Read post', 'inbox', 'submitting'])
+def test_furniture_around_an_article_goes_from_reader_and_export(remaining):
+    html, markdown, _ = extract_article(ZSCALER_LIKE, 'https://example.com/post')
+    assert remaining not in BeautifulSoup(html, 'html.parser').get_text()
+    assert remaining not in markdown
+
+
+def test_the_article_itself_survives_in_both_outputs():
+    html, markdown, _ = extract_article(ZSCALER_LIKE, 'https://example.com/post')
+    for kept in ['The real article title', 'A. AUTHOR', 'January 16, 2024', 'rundll32.exe file.dll,Run']:
+        assert kept in BeautifulSoup(html, 'html.parser').get_text()
+        assert kept in markdown
+
+
+@pytest.mark.parametrize('name', ['article-sidebar', 'related-posts', 'feedback', 'newsletter'])
+def test_named_blocks_with_real_writing_stay(name):
+    long_text = 'This callout holds a real finding written out at length. ' * 5
+    page = f'<article>{BODY}<div class="{name}"><p>{long_text}</p></div></article>'
+    assert 'real finding' in extract_article(page, 'https://example.com/post')[0]
+
+
+def test_a_class_on_the_whole_body_does_not_remove_it():
+    page = f'<article><div class="has-sidebar">{BODY}</div></article>'
+    assert 'paragraph' in extract_article(page, 'https://example.com/post')[0]
+
+
+@pytest.mark.parametrize('name', ['shared-drive', 'mysidebarwidget', 'feedbackloop'])
+def test_similar_class_names_are_left_alone(name):
+    page = f'<article>{BODY}<div class="{name}"><p>Short note here.</p></div></article>'
+    assert 'Short note here.' in extract_article(page, 'https://example.com/post')[0]
+
+
+@pytest.mark.parametrize('heading', ['Contents of the malware', 'Read more about the malware', 'How the implant is useful to operators here at length'])
+def test_ordinary_headings_are_not_furniture(heading):
+    page = f'{BODY}<h2>{heading}</h2><p>Keep this sentence under the heading, please.</p>{BODY}'
+    assert 'Keep this sentence' in text(page)
+
+
+def test_a_date_or_byline_above_the_title_stays():
+    assert 'June 2, 2026' in text(f'<p>June 2, 2026</p><h1>A long enough title here</h1>{BODY}')
+    assert 'By A. Writer' in text(f'<p>By A. Writer</p><h1>A long enough title here</h1>{BODY}')

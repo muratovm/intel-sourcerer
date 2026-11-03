@@ -4,7 +4,7 @@ from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
-from .boilerplate import strip_boilerplate
+from .boilerplate import strip_boilerplate, strip_named_furniture
 from markdownify import markdownify
 from markdown_it import MarkdownIt
 import bleach
@@ -65,6 +65,7 @@ def prepare_article(html, url, math_node):
     # Ignore navigation and executable/document metadata, retaining actual article structure.
     for tag in root.select('script, style, nav, footer, noscript, form, button, template'):
         tag.decompose()
+    strip_named_furniture(root)
     # Publisher recommendation cards are not part of the saved article.
     cutoff = False
     for tag in list(root.find_all(True)):
@@ -152,7 +153,8 @@ def extract_markdown(html, url):
         return soup.new_string(key)
 
     _, root, media = prepare_article(html, url, math_token)
-    result = markdownify(str(root), heading_style='ATX', bullets='-', strip=['div','span']).strip()
+    # Built from the cleaned article, so the export has none of the furniture the reader removes.
+    result = markdownify(clean_article_html(root), heading_style='ATX', bullets='-', strip=['div','span']).strip()
     for key, value in tokens.items():
         result = result.replace(key, value)
     return result, media
