@@ -3478,3 +3478,22 @@ h3.stat-title + .stat-bars { margin-top: 10px; }
 .lib-manage button:hover { background: none; color: var(--ink); text-decoration: underline; }
 .lib-manage .lib-delete { margin: 0; color: var(--hex-b42318); }
 .lib-manage .lib-delete:hover { color: var(--hex-b42318); }
+
+/* Phones: a compact header, the newest weeks of the heatmap first, and topic statistics within reach. */
+@media (max-width: 760px) {
+  .builder-header,
+  .library-page .builder-header,
+  .sources-page > .builder-header { gap: 2px 16px; padding-block: 10px 2px; }
+  .library-page .builder-header,
+  .sources-page > .builder-header { margin-bottom: 16px; }
+  .builder-links,
+  .library-page .builder-links { gap: 0 16px; }
+  .builder-links a { padding: 8px 0; }
+  .heat-scroll { direction: rtl; }
+  .heat-scroll > * { direction: ltr; }
+  .heat-weekdays { position: sticky; left: 0; z-index: 1; background: var(--surface); }
+}
+@media (max-width: 899px) {
+  .topics-list-page #topic-rows { max-height: 60vh; overflow-y: auto; }
+}
+#lib-details { scroll-margin-top: 8px; }

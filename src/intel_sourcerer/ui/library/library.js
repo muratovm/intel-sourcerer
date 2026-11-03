@@ -204,3 +204,14 @@ const tagMenu = document.querySelector(".lib-tag-menu");
 document.addEventListener("click", (event) => {
   if (tagMenu?.open && !tagMenu.contains(event.target)) tagMenu.open = false;
 });
+const articleList = document.querySelector(".lib-list"),
+  selectedArticle = articleList?.querySelector(".lib-item.selected");
+// The page reloads on selection, so bring a selected row further down the list back into view.
+if (selectedArticle && selectedArticle.getBoundingClientRect().bottom > articleList.getBoundingClientRect().bottom)
+  articleList.scrollTop +=
+    selectedArticle.getBoundingClientRect().top - articleList.getBoundingClientRect().top;
+// On narrow screens the details sit below the list, so tapping an article jumps down to them.
+if (matchMedia("(max-width: 899px)").matches)
+  document.querySelectorAll(".lib-item").forEach((item) => {
+    item.hash = "lib-details";
+  });
