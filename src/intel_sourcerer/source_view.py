@@ -18,7 +18,6 @@ def render_sources_list(sources, csrf_token="", config_label="Your source settin
             for label, url in [
                 ("Article index", source.parent_url),
                 ("RSS feed", source.rss_url),
-                ("Legacy index", source.legacy_parent_url),
             ]:
                 if url:
                     links.append(

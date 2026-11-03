@@ -138,7 +138,6 @@ function saveQueueDraft() {
 }
 function renderSetup() {
   show("setup");
-  $("builder-date").textContent = dateLabel(new Date());
   try {
     const draft = JSON.parse(localStorage.getItem(userStoragePrefix + "intel-queue-draft"));
     if (Array.isArray(draft))
@@ -149,12 +148,37 @@ function renderSetup() {
       ].slice(0, 100);
   } catch {}
   renderBuilder();
+  loadBuilderTopics();
+}
+// Temporary sessions have no topics, and the builder works the same without them.
+let builderTopics = null;
+async function loadBuilderTopics() {
+  try {
+    builderTopics = (await api("/api/topics")).topics;
+  } catch {
+    builderTopics = null;
+  }
+  renderBuilderTopics();
+  renderBuilder();
+}
+function renderBuilderTopics() {
+  const select = $("article-topic"),
+    chosen = select.value,
+    topics = builderTopics || [];
+  select.replaceChildren(
+    new Option("All articles", ""),
+    ...topics.map((topic) =>
+      new Option(`${topic.name} · ${topic.articles}${topic.status === "closed" ? " · closed" : ""}`, topic.id),
+    ),
+  );
+  select.value = topics.some((topic) => topic.id === chosen) ? chosen : "";
+  $("article-topic-field").hidden = !topics.length;
+  $("save-topic-names").replaceChildren(...topics.map((topic) => new Option(topic.name, topic.name)));
 }
 function renderHome() {
   currentArticle = null;
   noteModel = null;
   show("home");
-  $("home-date").textContent = dateLabel(new Date());
   const q = state.queue,
     active = q && !q.finished && q.items.length;
   $("home-current").replaceChildren();
@@ -439,18 +463,34 @@ function renderBuilder() {
     days = Number($("timeframe").value),
     since = days === 0 ? -Infinity : Date.now() - days * 86400000;
   const hideRead = document.querySelector('input[value="hide-read"]').checked,
-    onlyNoted = document.querySelector('input[value="only-noted"]').checked;
+    onlyNoted = document.querySelector('input[value="only-noted"]').checked,
+    topic = (builderTopics || []).find((item) => item.id === $("article-topic").value),
+    topicOrder = topic && new Map(topic.urls.map((url, index) => [url, index]));
+  // A topic is a deliberate choice, so its older and skipped articles still show.
+  $("timeframe").disabled = !!topic;
   const articles = state.articles.filter(
     (a) =>
       (!source || a.publisher.toLowerCase().includes(source)) &&
       (type === "All" ||
         (a.article_types || ["Threat research"]).includes(type)) &&
-      new Date(a.published_at).getTime() >= since &&
+      (topic
+        ? topicOrder.has(a.url)
+        : new Date(a.published_at).getTime() >= since && a.triage !== "skip") &&
       (!hideRead || !a.is_read) &&
-      a.triage !== "skip" &&
       (!onlyNoted || a.has_notes),
   );
-  $("result-count").textContent = `${articles.length} results · newest first`;
+  if (topic) articles.sort((a, b) => topicOrder.get(a.url) - topicOrder.get(b.url));
+  $("result-count").textContent = `${articles.length} results · ${topic ? "oldest" : "newest"} first`;
+  const addable = topic ? articles.filter((a) => !draftQueue.includes(a.url)) : [];
+  $("add-all").hidden = !addable.length;
+  $("add-all").textContent = `Add ${addable.length === articles.length ? "all" : addable.length + " more"} to queue`;
+  $("add-all").onclick = () => {
+    const room = 100 - draftQueue.length;
+    if (addable.length > room) notice("A queue can hold up to 100 articles.");
+    draftQueue.push(...addable.slice(0, room).map((a) => a.url));
+    saveQueueDraft();
+    renderBuilder();
+  };
   $("discovery-results").replaceChildren();
   for (const article of articles) {
     const row = document.createElement("div");
@@ -570,6 +610,8 @@ function renderBuilder() {
     empty.textContent = "Drag saved articles here to start your next session.";
     $("draft-queue").append(empty);
   }
+  $("save-topic-open").hidden = !draftQueue.length || !builderTopics || !$("save-topic-form").hidden;
+  if (!draftQueue.length) $("save-topic-form").hidden = $("save-topic-status").hidden = true;
   $("start").disabled = !draftQueue.length;
   $("start").textContent =
     `Start reading${draftQueue.length ? " · " + draftQueue.length + " articles" : ""}`;
@@ -578,6 +620,35 @@ document
   .querySelectorAll('input[name="article-status"]')
   .forEach((input) => (input.onchange = renderBuilder));
 $("article-source").oninput = renderBuilder;
+$("article-topic").onchange = renderBuilder;
+$("save-topic-open").onclick = () => {
+  $("save-topic-open").hidden = true;
+  $("save-topic-form").hidden = false;
+  $("save-topic-status").hidden = true;
+  $("save-topic-name").focus();
+};
+$("save-topic-form").onsubmit = async (event) => {
+  event.preventDefault();
+  try {
+    const saved = await api("/api/topic-from-articles", {
+      name: $("save-topic-name").value,
+      urls: draftQueue,
+    });
+    $("save-topic-name").value = "";
+    $("save-topic-form").hidden = true;
+    $("save-topic-status").firstElementChild.textContent = saved.created
+      ? "Saved as a new topic."
+      : saved.added
+        ? `Added ${saved.added} ${saved.added === 1 ? "article" : "articles"} to this topic.`
+        : "All of these are already in this topic.";
+    $("save-topic-link").textContent = saved.name;
+    $("save-topic-link").href = "/topic?" + new URLSearchParams({ id: saved.id });
+    $("save-topic-status").hidden = false;
+    await loadBuilderTopics();
+  } catch (error) {
+    notice(error.message);
+  }
+};
 $("article-type").onchange = renderBuilder;
 $("timeframe").onchange = renderBuilder;
 $("discovery-form").onsubmit = async (event) => {
@@ -786,6 +857,7 @@ async function renderQueue() {
   renderIOCs();
   loadRelated(article);
   loadTags(article);
+  loadTopics(article);
   const next = q.items[q.cursor + 1];
   document
     .querySelectorAll(".position")
@@ -1307,61 +1379,30 @@ async function loadRelated(article) {
     // The article is still readable without this, including offline and in temporary sessions.
   }
 }
-function renderTags(data) {
-  $("tags-list").replaceChildren(
-    ...data.tags.map(({ tag, others }) => {
-      const row = document.createElement("li"),
-        link = document.createElement("a"),
-        remove = document.createElement("button");
-      link.className = "tag-name";
-      link.href = "/library?" + new URLSearchParams({ tag });
-      link.textContent = tag;
-      link.title = `All articles tagged ${tag}`;
-      remove.type = "button";
-      remove.className = "tag-remove";
-      remove.textContent = "×";
-      remove.setAttribute("aria-label", `Remove tag ${tag}`);
-      remove.onclick = () => changeTags("/api/tag-delete", { tag });
-      row.append(link);
-      if (others.length) addAlsoInButton(row, others);
-      // The list that button adds belongs on its own line, after the remove button.
-      row.insertBefore(remove, row.querySelector(".ioc-also-list"));
-      return row;
-    }),
-  );
-  $("tags-list").hidden = !data.tags.length;
-  $("tag-suggestions").replaceChildren(
-    ...data.suggestions.map((value) => Object.assign(document.createElement("option"), { value })),
-  );
-  $("tags-panel").hidden = false;
-}
-async function changeTags(path, change) {
-  const article = currentArticle;
-  try {
-    const data = await api(path, { url: article.url, ...change });
-    if (currentArticle === article) renderTags(data);
-    return true;
-  } catch (error) {
-    notice(error.message);
-    return false;
-  }
-}
+const tagEditor = mountTagEditor($("tags-editor"), { post: api, onError: notice });
 async function loadTags(article) {
   $("tags-panel").hidden = true;
-  $("tag-input").value = "";
   try {
     const data = await api("/api/tags?" + new URLSearchParams({ url: article.url }));
-    if (currentArticle === article) renderTags(data);
+    if (currentArticle !== article) return;
+    tagEditor.show(article.url, data);
+    $("tags-panel").hidden = false;
   } catch {
     // Offline and temporary sessions have no tag store, so the panel stays hidden.
   }
 }
-$("tag-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const input = $("tag-input"),
-    tag = input.value.trim();
-  if (tag && (await changeTags("/api/tags", { tag }))) input.value = "";
-});
+const topicEditor = mountTopicEditor($("topics-editor"), { post: api, onError: notice });
+async function loadTopics(article) {
+  $("topics-panel").hidden = true;
+  try {
+    const data = await api("/api/article-topics?" + new URLSearchParams({ url: article.url }));
+    if (currentArticle !== article) return;
+    topicEditor.show(article.url, data);
+    $("topics-panel").hidden = false;
+  } catch {
+    // Offline and temporary sessions have no topics, so the panel stays hidden.
+  }
+}
 function iocGroup(title, items, label, kind) {
   const group = document.createElement("section"),
     heading = document.createElement("div"),
@@ -1729,428 +1770,6 @@ divider.addEventListener("keydown", (event) => {
     event.preventDefault();
     setPaneWidth(50);
   }
-});
-
-function plainHTML(text) {
-  const p = document.createElement("div");
-  p.textContent = text;
-  return p.innerHTML.replace(/\n/g, "<br>");
-}
-function noteLink(node) {
-  const href = (node.getAttribute("href") || "").trim();
-  return /^(https?:|mailto:)/i.test(href) ? href : "";
-}
-function sanitizeNotes(html) {
-  const template = document.createElement("template");
-  template.innerHTML = html;
-  function clean(node) {
-    if (node.nodeType === 3) return document.createTextNode(node.textContent);
-    if (node.nodeType !== 1) return document.createDocumentFragment();
-    const tag = node.tagName.toLowerCase(),
-      allowed = [
-        "p",
-        "div",
-        "br",
-        "strong",
-        "b",
-        "em",
-        "i",
-        "mark",
-        "blockquote",
-        "ul",
-        "ol",
-        "li",
-        "pre",
-        "code",
-      ];
-    const href = tag === "a" ? noteLink(node) : "";
-    const checklist = tag === "ul" && node.classList.contains("checklist"),
-      checked = tag === "li" && node.dataset.checked === "true";
-    const result = document.createElement(
-      tag === "span" && node.style.backgroundColor
-        ? "mark"
-        : allowed.includes(tag) || href
-          ? tag
-          : "span",
-    );
-    if (checklist) result.className = "checklist";
-    if (checked) result.dataset.checked = "true";
-    if (href) {
-      result.setAttribute("href", href);
-      result.setAttribute("target", "_blank");
-      result.setAttribute("rel", "noopener noreferrer");
-    }
-    for (const child of node.childNodes) result.append(clean(child));
-    if (result.tagName === "SPAN") {
-      const fragment = document.createDocumentFragment();
-      fragment.append(...result.childNodes);
-      return fragment;
-    }
-    if (node.style.backgroundColor && result.tagName !== "MARK") {
-      const mark = document.createElement("mark");
-      mark.append(result);
-      return mark;
-    }
-    return result;
-  }
-  const holder = document.createElement("div");
-  for (const node of template.content.childNodes) holder.append(clean(node));
-  return holder.innerHTML;
-}
-function notesText() {
-  return sanitizeNotes($("notes").innerHTML);
-}
-function loadNotes(text, format) {
-  $("notes").innerHTML =
-    format === "html" ? sanitizeNotes(text) : plainHTML(text);
-  noteRange = null;
-  clearTypingFormat = false;
-  updateFormatButtons();
-}
-let noteRange = null;
-document.addEventListener("selectionchange", () => {
-  const sel = window.getSelection();
-  if (
-    sel.rangeCount &&
-    $("notes").contains(sel.anchorNode) &&
-    $("notes").contains(sel.focusNode)
-  )
-    noteRange = sel.getRangeAt(0).cloneRange();
-});
-function focusNotes() {
-  $("notes").focus();
-  const sel = window.getSelection();
-  if (noteRange && $("notes").contains(noteRange.startContainer)) {
-    sel.removeAllRanges();
-    sel.addRange(noteRange);
-  } else {
-    const range = document.createRange();
-    range.selectNodeContents($("notes"));
-    range.collapse(false);
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }
-}
-function noteChanged() {
-  $("notes").dispatchEvent(new Event("input"));
-}
-function insertCallout(text, html = null) {
-  // On a phone's Read tab the editor is hidden and can't take a caret or show a keyboard.
-  if ($("notes").offsetParent === null) {
-    $("notes").insertAdjacentHTML(
-      "beforeend",
-      "<blockquote>" + (html ? sanitizeNotes(html) : plainHTML(text)) + "</blockquote><div><br></div>",
-    );
-    $("tab-notes").textContent = "Notes · added";
-    noteChanged();
-    return;
-  }
-  focusNotes();
-  const selection = window.getSelection();
-  if (selection.rangeCount) selection.collapseToEnd();
-  document.execCommand(
-    "insertHTML",
-    false,
-    "<blockquote>" +
-      (html ? sanitizeNotes(html) : plainHTML(text)) +
-      "</blockquote><div><br></div>",
-  );
-  noteChanged();
-}
-function selectionFormatState(kind) {
-  const selection = window.getSelection();
-  if (!selection.rangeCount || !$("notes").contains(selection.anchorNode))
-    return false;
-  const selector =
-    kind === "bold"
-      ? "b,strong"
-      : kind === "list"
-        ? "ul:not(.checklist),ol"
-        : kind === "checklist"
-          ? "ul.checklist"
-          : "mark";
-  if (kind === "list" || kind === "checklist") {
-    const node =
-      selection.anchorNode.nodeType === 1
-        ? selection.anchorNode
-        : selection.anchorNode.parentElement;
-    return !!node.closest(selector);
-  }
-  if (selection.isCollapsed) {
-    if (kind === "bold") return document.queryCommandState("bold");
-    const node =
-      selection.anchorNode.nodeType === 1
-        ? selection.anchorNode
-        : selection.anchorNode.parentElement;
-    return !!node.closest(selector);
-  }
-  const range = selection.getRangeAt(0),
-    walker = document.createTreeWalker($("notes"), NodeFilter.SHOW_TEXT);
-  let node,
-    found = false;
-  while ((node = walker.nextNode())) {
-    if (!range.intersectsNode(node) || !node.length) continue;
-    if (node === range.startContainer && range.startOffset === node.length)
-      continue;
-    if (node === range.endContainer && range.endOffset === 0) continue;
-    found = true;
-    if (!node.parentElement.closest(selector)) return false;
-  }
-  return found;
-}
-function updateFormatButtons() {
-  for (const kind of ["bold", "highlight", "list", "checklist"]) {
-    const button = document.querySelector(`[data-format="${kind}"]`);
-    button.setAttribute("aria-pressed", String(selectionFormatState(kind)));
-  }
-}
-document.addEventListener("selectionchange", updateFormatButtons);
-function formatSelection(kind) {
-  const selection = window.getSelection();
-  if (selection.isCollapsed) {
-    if (kind === "bold") document.execCommand("bold");
-    else notice("Select note text to highlight or unhighlight it.");
-    updateFormatButtons();
-    return;
-  }
-  const range = selection.getRangeAt(0),
-    prefix = document.createRange();
-  prefix.selectNodeContents($("notes"));
-  prefix.setEnd(range.startContainer, range.startOffset);
-  const start = prefix.toString().length,
-    end = start + range.toString().length,
-    enabled = !selectionFormatState(kind);
-  let offset = 0;
-  function rebuild(node, bold = false, highlight = false, italic = false) {
-    const fragment = document.createDocumentFragment();
-    if (node.nodeType === 3) {
-      const text = node.textContent,
-        base = offset;
-      offset += text.length;
-      const cuts = [
-        0,
-        Math.max(0, Math.min(text.length, start - base)),
-        Math.max(0, Math.min(text.length, end - base)),
-        text.length,
-      ].sort((a, b) => a - b);
-      for (let i = 1; i < cuts.length; i++) {
-        const from = cuts[i - 1],
-          to = cuts[i];
-        if (to === from) continue;
-        const selected = base + from >= start && base + to <= end;
-        let piece = document.createTextNode(text.slice(from, to));
-        const flags = { bold, highlight, italic };
-        if (selected) flags[kind] = enabled;
-        for (const [flag, tag] of [
-          ["italic", "em"],
-          ["bold", "strong"],
-          ["highlight", "mark"],
-        ])
-          if (flags[flag]) {
-            const wrapper = document.createElement(tag);
-            wrapper.append(piece);
-            piece = wrapper;
-          }
-        fragment.append(piece);
-      }
-      return fragment;
-    }
-    if (node.nodeType !== 1) return fragment;
-    const tag = node.tagName.toLowerCase();
-    bold = bold || ["b", "strong"].includes(tag);
-    highlight = highlight || tag === "mark";
-    italic = italic || ["i", "em"].includes(tag);
-    const inline = ["b", "strong", "mark", "i", "em", "span"].includes(tag),
-      target = inline ? fragment : node.cloneNode(false);
-    for (const child of node.childNodes)
-      target.append(rebuild(child, bold, highlight, italic));
-    return target;
-  }
-  const result = document.createDocumentFragment();
-  for (const node of Array.from($("notes").childNodes))
-    result.append(rebuild(node));
-  $("notes").replaceChildren(result);
-  // Keep the selection so its formatting is visible in the toolbar.
-  const walker = document.createTreeWalker($("notes"), NodeFilter.SHOW_TEXT);
-  let node,
-    total = 0;
-  const restored = document.createRange();
-  let started = false;
-  while ((node = walker.nextNode())) {
-    if (!started && total + node.length >= start) {
-      restored.setStart(node, start - total);
-      started = true;
-    }
-    if (total + node.length >= end) {
-      restored.setEnd(node, end - total);
-      break;
-    }
-    total += node.length;
-  }
-  selection.removeAllRanges();
-  selection.addRange(restored);
-  noteRange = restored.cloneRange();
-  clearTypingFormat = true;
-  noteChanged();
-  updateFormatButtons();
-}
-// Chrome moves the caret to the start of existing text when it wraps it in a list.
-function toggleNoteList() {
-  const selection = window.getSelection(),
-    collapsed = selection.isCollapsed,
-    prefix = document.createRange();
-  prefix.selectNodeContents($("notes"));
-  prefix.setEnd(selection.focusNode, selection.focusOffset);
-  const caret = prefix.toString().length;
-  document.execCommand("insertUnorderedList");
-  if (!collapsed) return;
-  // A new empty bullet has no text to land in, and Chrome already put the caret there.
-  const focus = selection.focusNode,
-    line = (focus?.nodeType === 1 ? focus : focus?.parentElement)?.closest("li");
-  if (line && !line.textContent.trim()) return;
-  const walker = document.createTreeWalker($("notes"), NodeFilter.SHOW_TEXT);
-  let node,
-    total = 0;
-  while ((node = walker.nextNode())) {
-    if (total + node.length >= caret) {
-      selection.collapse(node, caret - total);
-      noteRange = selection.getRangeAt(0).cloneRange();
-      return;
-    }
-    total += node.length;
-  }
-}
-function caretElement() {
-  const node = window.getSelection().focusNode;
-  return node?.nodeType === 1 ? node : node?.parentElement;
-}
-function plainListItems(list) {
-  list.classList.remove("checklist");
-  if (!list.classList.length) list.removeAttribute("class");
-  for (const item of list.children) delete item.dataset.checked;
-}
-function toggleChecklist() {
-  const list = caretElement()?.closest("ul");
-  if (list?.classList.contains("checklist")) {
-    toggleNoteList();
-    return;
-  }
-  if (!list) toggleNoteList();
-  caretElement()?.closest("ul")?.classList.add("checklist");
-}
-// The tick box is drawn in the item's left padding, so it's not text the caret can enter.
-function checklistBoxItem(event) {
-  const item = event.target.closest?.("ul.checklist > li");
-  return item && event.clientX - item.getBoundingClientRect().left < 26 ? item : null;
-}
-$("notes").addEventListener("mousedown", (event) => {
-  if (checklistBoxItem(event)) event.preventDefault();
-});
-$("notes").addEventListener("click", (event) => {
-  const item = checklistBoxItem(event);
-  if (!item || busy) return;
-  if (item.dataset.checked === "true") delete item.dataset.checked;
-  else item.dataset.checked = "true";
-  noteChanged();
-});
-// Enter copies the item's attributes, and a new task shouldn't start out ticked.
-$("notes").addEventListener("input", (event) => {
-  if (event.inputType !== "insertParagraph") return;
-  const item = caretElement()?.closest("ul.checklist > li");
-  if (item && !item.textContent.trim()) delete item.dataset.checked;
-});
-let clearTypingFormat = false;
-$("notes").addEventListener("beforeinput", (event) => {
-  if (
-    !clearTypingFormat ||
-    !["insertText", "insertParagraph", "insertLineBreak"].includes(
-      event.inputType,
-    )
-  )
-    return;
-  clearTypingFormat = false;
-  const selection = window.getSelection();
-  event.preventDefault();
-  const range = selection.getRangeAt(0);
-  range.deleteContents();
-  range.collapse(true);
-  const marker = document.createTextNode("");
-  range.insertNode(marker);
-  let parent = marker.parentElement;
-  while (
-    parent !== $("notes") &&
-    ["B", "STRONG", "MARK", "I", "EM", "SPAN"].includes(parent.tagName)
-  ) {
-    const after = parent.cloneNode(false);
-    while (marker.nextSibling) after.append(marker.nextSibling);
-    parent.after(marker, after);
-    if (!parent.hasChildNodes()) parent.remove();
-    if (!after.hasChildNodes()) after.remove();
-    parent = marker.parentElement;
-  }
-  marker.textContent =
-    event.inputType === "insertText" ? event.data || "" : "\n";
-  range.setStartAfter(marker);
-  range.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(range);
-  noteRange = range.cloneRange();
-  noteChanged();
-  updateFormatButtons();
-});
-document.querySelectorAll("[data-format]").forEach((button) => {
-  button.addEventListener("mousedown", (e) => e.preventDefault());
-  button.onclick = () => {
-    if (busy) return;
-    focusNotes();
-    const action = button.dataset.format;
-    if (action === "callout") {
-      document.execCommand("formatBlock", false, "blockquote");
-      noteChanged();
-    } else if (action === "list") {
-      const checklist = caretElement()?.closest("ul.checklist");
-      if (checklist) plainListItems(checklist);
-      else toggleNoteList();
-      noteChanged();
-      updateFormatButtons();
-    } else if (action === "checklist") {
-      toggleChecklist();
-      noteChanged();
-      updateFormatButtons();
-    } else formatSelection(action);
-  };
-});
-$("notes").addEventListener("keydown", (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
-    event.preventDefault();
-    formatSelection("bold");
-  }
-  // The same tick from the keyboard: Cmd or Ctrl+Enter on the current item.
-  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-    const item = caretElement()?.closest("ul.checklist > li");
-    if (!item) return;
-    event.preventDefault();
-    if (item.dataset.checked === "true") delete item.dataset.checked;
-    else item.dataset.checked = "true";
-    noteChanged();
-  }
-});
-// Links in an editable box place the caret, so opening one takes a modifier.
-$("notes").addEventListener("click", (event) => {
-  const link = event.target.closest?.("a");
-  if (!link || !(event.metaKey || event.ctrlKey)) return;
-  event.preventDefault();
-  window.open(link.href, "_blank", "noopener,noreferrer");
-});
-
-$("notes").addEventListener("paste", (event) => {
-  event.preventDefault();
-  document.execCommand(
-    "insertText",
-    false,
-    event.clipboardData.getData("text/plain"),
-  );
-  noteChanged();
 });
 
 // Finder drops provide file bytes, rather than a usable local filesystem path.

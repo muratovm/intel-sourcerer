@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Account · Intel Sourcerer</title>
+    <script src="/account.js" defer></script>
+    <link rel="stylesheet" href="/reader.css" />
+  </head>
+  <body>
+    <main class="account-page">
+      <!-- header: /account -->
+      <h1 class="account-title">Account</h1>
+      <div class="account-layout">
+        <section class="account-stats" aria-label="Reading stats">${stats}</section>
+        <section class="auth-card" aria-label="Account settings">
+          <p class="auth-description">Each user has a separate library and source settings.</p>
+          <p class="auth-error" role="alert">${error}</p>
+          ${content}
+        </section>
+      </div>
+      ${signout}
+    </main>
+  </body>
+</html>

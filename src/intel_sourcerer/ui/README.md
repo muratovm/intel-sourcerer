@@ -19,6 +19,8 @@ Python modules prepare data and pass escaped values into ${placeholder} slots. t
 
 Format HTML, JavaScript, and CSS with Prettier and Python with Ruff. Run uv run pytest after changing rendering or behavior. No build step is required.
 
+- shared/notes-editor.js: the rich notes box, used by the reader and topic pages.
+- topics/: the Topics list and topic page, with topics.js for their controls. Storage and rendering are in topics.py.
 - workspace/focus.js: timed reading controls and pause/resume synchronization. Timed session storage and statistics are handled by timed_reading.py.
 
 The viewer opens no database or source configuration. Database wrappers in library.py/stats.py/timed_reading.py prepare JSON on the backend; their data-based renderers produce the same layouts on the viewer. source_view.py renders serialized sources. See docs/hosting.md for the service boundary.

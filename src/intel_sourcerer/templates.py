@@ -16,9 +16,18 @@ SETUP_FIELD = (
 )
 
 
+def _header(active):
+    """Every main page draws the same header, differing only in which link is marked."""
+    link = f'<a href="{active}">'
+    return (UI_ROOT / "shared/header.html").read_text(encoding="utf-8").replace(
+        link, f'<a class="active" aria-current="page" href="{active}">'
+    )
+
+
 def load_template(name):
     """Expand trusted page fragments without evaluating browser content."""
     source = (UI_ROOT / name).read_text(encoding="utf-8")
+    source = re.sub(r"<!-- header: (\S*) -->", lambda match: _header(match.group(1)), source)
     return re.sub(
         r"<!-- include: ([a-zA-Z0-9_./-]+) -->",
         lambda match: load_template(match.group(1)),

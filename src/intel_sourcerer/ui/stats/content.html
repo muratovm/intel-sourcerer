@@ -1,0 +1,38 @@
+      <div class="stats-content">
+        <h2 class="stats-heading">Your reading year · ${today_year}</h2>
+        <p class="muted">
+          ${total_label} · ${active_days_label} · America/Toronto
+        </p>
+        <div class="heat-scroll">
+          <div class="heat-months">${month_labels}</div>
+          <div class="heat-layout">
+            <div class="heat-weekdays">
+              <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span
+              ><span>Fri</span><span>Sat</span><span>Sun</span>
+            </div>
+            <div
+              class="heat-grid"
+              role="group"
+              aria-label="Daily articles read in ${today_year2}"
+            >
+              ${day_cells}
+            </div>
+          </div>
+        </div>
+        <div class="heat-legend">
+          Less <span class="heat-day level-0"></span
+          ><span class="heat-day level-1"></span
+          ><span class="heat-day level-2"></span
+          ><span class="heat-day level-3"></span
+          ><span class="heat-day level-4"></span> More
+        </div>
+        <p class="muted">
+          Each article counts once, on the day you first mark it read. Changing
+          its read status later does not erase that reading activity. Hover or
+          focus a day to see its count.
+        </p>
+        <p class="muted">
+          ${undated_label} excluded from the heatmap.
+        </p>
+        ${timed_sessions}
+      </div>

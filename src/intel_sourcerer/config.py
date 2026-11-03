@@ -14,6 +14,7 @@ class PublisherSource:
     parent_url: str
     source_type: str
     rss_url: str | None = None
+    # Still read so existing personal source files load, but not shown: it can redirect to parent_url.
     legacy_parent_url: str | None = None
     notes: str = ""
     enabled: bool = True

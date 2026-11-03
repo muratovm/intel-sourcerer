@@ -39,9 +39,8 @@ name = "Google Threat Analysis Group"
 source_type = "security_vendor"
 enabled = true
 parent_url = "https://blog.google/security/"
-legacy_parent_url = "https://blog.google/threat-analysis-group/"
 rss_url = "https://blog.google/security/rss/"
-notes = "Legacy TAG index redirects to the broader Security blog. This feed includes non-TAG security articles."
+notes = "The old TAG blog now redirects to the broader Security blog, so this feed includes non-TAG security articles."
 
 [[sources]]
 id = "google-gtig"

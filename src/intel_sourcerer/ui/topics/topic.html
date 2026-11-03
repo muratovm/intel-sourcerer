@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="user-id" content="__USER_ID__" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="csrf-token" content="${csrf_token}" />
+    <script src="/notes-editor.js" defer></script>
+    <script src="/topics.js" defer></script>
+    <title>${topic_name} · Intel Sourcerer</title>
+    <link rel="stylesheet" href="/reader.css" />
+  </head>
+  <body>
+    <main class="topics-page" id="topic-page" data-id="${id}" data-revision="${revision}">
+      <!-- header: /topics -->
+      <div class="topics-content">
+        <a class="topic-back" href="/topics">All topics</a>
+        <div class="topic-heading">
+          <div>
+            <h1>${topic_name}</h1>
+            <p class="muted">${summary}</p>
+          </div>
+          <div class="topic-actions">
+            <label class="sr-only" for="topic-status">Topic status</label>
+            <select id="topic-status">
+              <option value="tracking" ${tracking_selected}>Tracking</option>
+              <option value="closed" ${closed_selected}>Closed</option>
+            </select>
+            <button id="rename-topic" type="button">Rename</button>
+            <button id="delete-topic" type="button">Delete</button>
+            <button id="read-unread" type="button" class="primary" data-urls="${unread_urls}" ${read_hidden}>${read_label}</button>
+          </div>
+        </div>
+        <p id="topic-message" role="alert" hidden></p>
+        <div class="topic-rule"></div>
+        <div class="topic-columns">
+          <section class="topic-articles" aria-label="Articles in this topic">
+            <div class="topic-section-head">
+              <h2>Articles</h2>
+              <form id="add-article-form" class="topic-add">
+                <label class="sr-only" for="add-article">Add an article from your Library or paste a URL</label>
+                <input id="add-article" type="text" list="library-articles" placeholder="Add from Library or paste a URL" autocomplete="off" />
+                <datalist id="library-articles">${candidates}</datalist>
+                <button type="submit">Add</button>
+              </form>
+            </div>
+            <div class="topic-article-list">${article_rows}</div>
+            <section id="topic-suggested-section" aria-label="Articles that might belong here" hidden>
+              <h3>Might belong here</h3>
+              <p class="muted">Library articles that share an indicator with this topic.</p>
+              <div id="topic-suggested-list" class="topic-article-list"></div>
+            </section>
+          </section>
+
+          <aside class="topic-notes" aria-label="Topic notes">
+            <div class="notes-heading">
+              <h2>Topic notes</h2>
+              <span id="save-status" class="muted" role="status" aria-live="polite">Saved</span>
+            </div>
+            <div class="notes-editor">
+              <div class="notes-toolbar" role="toolbar" aria-label="Note formatting">
+                <button type="button" data-format="bold" aria-label="Bold" title="Bold (⌘B / Ctrl+B)"><b aria-hidden="true">B</b></button
+                ><button type="button" data-format="highlight" aria-label="Highlight" title="Highlight selected text"><span class="tool-highlight" aria-hidden="true">A</span></button
+                ><span class="toolbar-gap" aria-hidden="true"></span
+                ><button type="button" data-format="callout" aria-label="Callout" title="Turn this line into a callout">
+                  <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true"><path d="M3 3v12" stroke-width="2.5" /><path d="M8 5h8M8 9h8M8 13h5" /></svg></button
+                ><button type="button" data-format="list" aria-label="Bulleted list" title="Bulleted list">
+                  <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true"><path d="M3.5 4.5h.01M3.5 9h.01M3.5 13.5h.01" stroke-width="3" /><path d="M7.5 4.5H16M7.5 9H16M7.5 13.5H16" /></svg></button
+                ><button type="button" data-format="checklist" aria-label="Checklist" title="Checklist">
+                  <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true"><rect x="2.5" y="2.5" width="13" height="13" rx="2.5" /><path d="M5.8 9.2l2.3 2.3 4.2-4.8" /></svg></button
+                ><details id="cite-menu" class="cite-menu" ${cite_hidden}>
+                  <summary>Cite an article</summary>
+                  <div class="cite-list">${cite_buttons}</div>
+                </details>
+              </div>
+              <div
+                id="notes"
+                contenteditable="true"
+                role="textbox"
+                aria-multiline="true"
+                aria-label="Your notes on this topic"
+                data-placeholder="What's the overall picture? Where do the reports agree, and what's still open?"
+              >${notes}</div>
+            </div>
+            <p class="note-hint muted">Notes here cover the whole topic. Cmd- or Ctrl-click a citation to open that article.</p>
+            <details id="topic-indicators" class="iocs-panel" open hidden>
+              <summary>Indicators across this topic <span id="topic-indicator-count" class="muted"></span></summary>
+              <ul id="topic-indicator-list" class="topic-indicators"></ul>
+              <p id="topic-indicator-status" class="muted iocs-hint"></p>
+            </details>
+            <details class="highlights-panel" ${highlight_hidden}>
+              <summary>Highlights from these articles <span class="muted">${highlight_count}</span></summary>
+              ${highlights}
+            </details>
+          </aside>
+        </div>
+      </div>
+    </main>
+    <dialog id="delete-topic-dialog" class="lib-dialog" aria-labelledby="delete-topic-title" aria-describedby="delete-topic-description">
+      <h2 id="delete-topic-title">Delete this topic?</h2>
+      <p id="delete-topic-description">
+        The topic and its notes will be deleted. Its articles stay in your Library with their own notes.
+      </p>
+      <p id="delete-topic-error" role="alert" hidden></p>
+      <div class="lib-dialog-actions">
+        <button id="cancel-delete-topic" type="button" autofocus>Cancel</button
+        ><button id="confirm-delete-topic" class="danger" type="button">Delete topic</button>
+      </div>
+    </dialog>
+    <dialog id="rename-topic-dialog" class="lib-dialog" aria-labelledby="rename-topic-title">
+      <form id="rename-topic-form">
+        <h2 id="rename-topic-title">Rename topic</h2>
+        <label for="topic-new-name">Name</label>
+        <input id="topic-new-name" type="text" required maxlength="80" value="${name_value}" />
+        <p id="rename-topic-error" role="alert" hidden></p>
+        <div class="lib-dialog-actions">
+          <button id="cancel-rename-topic" type="button">Cancel</button>
+          <button type="submit" class="primary">Save name</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

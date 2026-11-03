@@ -18,7 +18,7 @@ def render_stats(db, now=None):
     return render_stats_data(stats_data(db), now)
 
 
-def render_stats_data(data, now=None):
+def render_stats_section(data, now=None):
     """Build the heatmap from data provided by the backend."""
     zone = ZoneInfo("America/Toronto")
     today = (now or datetime.now(zone)).astimezone(zone).date()
@@ -89,7 +89,7 @@ def render_stats_data(data, now=None):
         )
     total = sum(counts.values())
     return render_template(
-        "stats/index.html",
+        "stats/content.html",
         today_year=today.year,
         total_label=f"{total} article{'' if total == 1 else 's'} read",
         active_days_label=f"{len(counts)} active day{'' if len(counts) == 1 else 's'}",
@@ -105,3 +105,8 @@ def render_stats_data(data, now=None):
             data["timing"]["sessions"], data["timing"]["abandoned"]
         ),
     )
+
+
+def render_stats_data(data, now=None):
+    """The stats as a page of their own, for when there are no accounts to show them under."""
+    return render_template("stats/index.html", stats=render_stats_section(data, now))

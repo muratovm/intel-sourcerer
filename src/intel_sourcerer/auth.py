@@ -48,6 +48,29 @@ class Accounts:
             db.execute("UPDATE users SET salt=?,password_hash=? WHERE id=?", (salt, password_hash(new, salt), user_id))
             db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
 
+    def delete_account(self, user_id, username, password):
+        """Permanently remove an account and everything stored for it, once its owner proves who they are."""
+        if not isinstance(password, str) or len(password.encode()) > 1024:
+            raise ValueError("The username or password is incorrect.")
+        with self.transaction() as db:
+            user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+            if (
+                not user
+                or str(username).strip().lower() != user["username"]
+                or not secrets.compare_digest(password_hash(password, user["salt"]), user["password_hash"])
+            ):
+                raise ValueError("The username or password is incorrect.")
+            db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+            db.execute("DELETE FROM users WHERE id=?", (user_id,))
+        database, directory = Path(user["database_path"]), self.legacy.parent / "users" / user_id
+        shutil.rmtree(directory, ignore_errors=True)
+        if database.resolve() == self.legacy:
+            # The first account's library sits beside the shared account data rather than in its own folder.
+            for suffix in ("", "-wal", "-shm"):
+                Path(str(self.legacy) + suffix).unlink(missing_ok=True)
+            for name in ("backups", "media", "pdf-assets", "uploads"):
+                shutil.rmtree(self.legacy.parent / name, ignore_errors=True)
+
     def empty(self):
         with self.transaction() as db:return not db.execute('SELECT 1 FROM users').fetchone()
 

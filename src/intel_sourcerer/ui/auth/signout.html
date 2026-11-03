@@ -1,0 +1,27 @@
+<section class="account-signout" aria-label="Sign out or delete account">
+  <p>Signed in as <strong>${username}</strong></p>
+  <div class="account-actions">
+    <form method="post" action="/auth/logout">
+      <input type="hidden" name="csrf_token" value="${csrf}">
+      <button type="submit" class="account-signout-button">Sign out</button>
+    </form>
+    <button id="delete-account" type="button" class="account-delete-button">Delete account</button>
+  </div>
+</section>
+<dialog id="delete-account-dialog" class="lib-dialog" aria-labelledby="delete-account-title" aria-describedby="delete-account-description">
+  <form method="post" action="/auth/delete-account">
+    <h2 id="delete-account-title">Delete your account?</h2>
+    <p id="delete-account-description">
+      This permanently deletes your account, library, notes, topics, tags, reading history and backups. It can't be undone.
+    </p>
+    <input type="hidden" name="csrf_token" value="${csrf}">
+    <label for="delete-account-username">Username</label>
+    <input id="delete-account-username" name="username" type="text" required autocomplete="off" autocapitalize="none" spellcheck="false">
+    <label for="delete-account-password">Password</label>
+    <input id="delete-account-password" name="password" type="password" required autocomplete="current-password">
+    <div class="lib-dialog-actions">
+      <button id="cancel-delete-account" type="button" autofocus>Cancel</button>
+      <button type="submit" class="danger">Delete account</button>
+    </div>
+  </form>
+</dialog>

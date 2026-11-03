@@ -171,3 +171,36 @@ document.getElementById('rename-form').addEventListener('submit', async (event) 
     renameSave.disabled = false;
   }
 });
+
+const tagBox = document.getElementById("lib-tag-editor");
+if (tagBox) {
+  const editor = mountTagEditor(tagBox, {
+    post: libraryAPI,
+    onError(message) {
+      feedback.hidden = false;
+      feedback.textContent = message;
+    },
+    // Keeps the list in step without a reload, in the same short form the server draws.
+    onChange(names) {
+      const row = document.querySelector(".lib-item.selected .lib-row-tags");
+      if (!row) return;
+      row.replaceChildren(
+        ...names.slice(0, 2).map((name) =>
+          Object.assign(document.createElement("span"), { className: "lib-row-tag", textContent: name }),
+        ),
+      );
+      if (names.length > 2) row.append(Object.assign(document.createElement("span"), { textContent: `+${names.length - 2}` }));
+      row.hidden = !names.length;
+    },
+  });
+  fetch("/api/tags?" + new URLSearchParams({ url: tagBox.dataset.url }))
+    .then((response) => (response.ok ? response.json() : Promise.reject()))
+    .then((data) => editor.show(tagBox.dataset.url, data))
+    .catch(() => {
+      tagBox.hidden = true;
+    });
+}
+const tagMenu = document.querySelector(".lib-tag-menu");
+document.addEventListener("click", (event) => {
+  if (tagMenu?.open && !tagMenu.contains(event.target)) tagMenu.open = false;
+});

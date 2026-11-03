@@ -99,6 +99,30 @@ def connect_database(path):
     CREATE TRIGGER IF NOT EXISTS article_tags_removed AFTER DELETE ON articles
       BEGIN DELETE FROM article_tags WHERE article_url=OLD.url; END;
     """)
+    db.executescript("""CREATE TABLE IF NOT EXISTS topics (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      status TEXT NOT NULL DEFAULT 'tracking' CHECK (status IN ('tracking','closed')),
+      notes TEXT NOT NULL DEFAULT '', notes_revision INTEGER NOT NULL DEFAULT 0, notes_updated_at TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS topic_articles (
+      topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      article_url TEXT NOT NULL REFERENCES articles(url) DEFERRABLE INITIALLY DEFERRED,
+      added_at TEXT NOT NULL,
+      PRIMARY KEY(topic_id,article_url)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS topic_articles_article ON topic_articles(article_url);
+    CREATE TABLE IF NOT EXISTS topic_dismissed (
+      topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      article_url TEXT NOT NULL,
+      PRIMARY KEY(topic_id,article_url)
+    ) WITHOUT ROWID;
+    CREATE TRIGGER IF NOT EXISTS topic_articles_removed AFTER DELETE ON articles
+      BEGIN
+        DELETE FROM topic_articles WHERE article_url=OLD.url;
+        DELETE FROM topic_dismissed WHERE article_url=OLD.url;
+      END;
+    """)
     db.executescript("""CREATE TABLE IF NOT EXISTS source_fetch_state (
       source_id TEXT PRIMARY KEY, etag TEXT, last_modified TEXT, covered_since TEXT,
       paused_until TEXT, pause_reason TEXT

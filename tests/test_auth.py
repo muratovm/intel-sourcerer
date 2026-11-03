@@ -3,6 +3,7 @@ from contextlib import closing
 from threading import Thread
 import re
 import httpx
+import pytest
 from intel_sourcerer.web import create_server
 from intel_sourcerer.auth import Accounts
 from intel_sourcerer.storage import connect_database
@@ -86,3 +87,67 @@ def test_login_throttling_and_password_hashes(tmp_path):
     with accounts.connect() as db:
         row = db.execute('SELECT * FROM users').fetchone()
         assert row['password_hash'] != 'very-long-password'
+
+
+def make_accounts(tmp_path):
+    config = tmp_path / 'sources.toml'
+    config.write_text('sources = []\n')
+    connect_database(tmp_path / 'articles.sqlite3').close()
+    return Accounts(tmp_path / 'articles.sqlite3', config)
+
+
+def test_deleting_needs_the_right_username_and_password(tmp_path):
+    accounts = make_accounts(tmp_path)
+    owner = accounts.create_user('owner', 'very-long-password', first=True)
+    for username, password in [('owner', 'wrong-long-password'), ('other', 'very-long-password'), ('', ''), ('owner', 'x' * 2000)]:
+        with pytest.raises(ValueError):
+            accounts.delete_account(owner, username, password)
+    assert not accounts.empty()
+    assert (tmp_path / 'articles.sqlite3').exists()
+
+
+def test_deleting_a_later_account_leaves_everyone_else_alone(tmp_path):
+    accounts = make_accounts(tmp_path)
+    owner = accounts.create_user('owner', 'very-long-password', first=True)
+    reader = accounts.create_user('reader', 'another-long-password')
+    token, _ = accounts.new_session(reader)
+    accounts.delete_account(reader, ' READER ', 'another-long-password')
+    assert not (tmp_path / 'users' / reader).exists()
+    assert (tmp_path / 'users' / owner).exists() and (tmp_path / 'articles.sqlite3').exists()
+    assert accounts.session('intel_session=' + token) is None
+
+
+def test_deleting_the_first_account_removes_its_library_and_copies(tmp_path):
+    accounts = make_accounts(tmp_path)
+    owner = accounts.create_user('owner', 'very-long-password', first=True)
+    for name in ('backups', 'media', 'pdf-assets', 'uploads'):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / 'file').write_text('private')
+    accounts.delete_account(owner, 'owner', 'very-long-password')
+    assert accounts.empty()
+    assert sorted(path.name for path in tmp_path.iterdir() if not path.name.startswith('accounts')) == ['sources.toml', 'users']
+    assert not (tmp_path / 'users' / owner).exists()
+
+
+def test_delete_account_over_http(tmp_path):
+    config = tmp_path / 'sources.toml'
+    config.write_text('sources = []\n')
+    server = create_server(tmp_path / 'articles.sqlite3', 0, config)
+    Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with httpx.Client(base_url=f'http://127.0.0.1:{server.server_port}') as client:
+            client.post('/auth/setup', data={'username': 'owner', 'password': 'very-long-password', 'csrf_token': csrf(client.get('/setup'))})
+            account = client.get('/account')
+            assert 'Add an account' not in account.text and 'Delete account' in account.text
+            bad = client.post('/auth/delete-account', data={'username': 'owner', 'password': 'wrong-long-password', 'csrf_token': csrf(account)})
+            assert bad.status_code == 400 and 'incorrect' in bad.text
+            assert client.post('/auth/delete-account', data={'username': 'owner', 'password': 'very-long-password', 'csrf_token': 'bad'}).status_code == 403
+            assert (tmp_path / 'articles.sqlite3').exists()
+            done = client.post('/auth/delete-account', data={'username': 'owner', 'password': 'very-long-password', 'csrf_token': csrf(account)})
+            assert done.status_code == 303 and done.headers['location'] == '/setup'
+            assert 'Max-Age=0' in done.headers['set-cookie']
+            assert not (tmp_path / 'articles.sqlite3').exists()
+            assert client.get('/api/state').status_code == 401
+    finally:
+        server.shutdown()
+        server.server_close()

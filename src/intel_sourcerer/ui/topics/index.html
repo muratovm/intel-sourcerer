@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="user-id" content="__USER_ID__" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="csrf-token" content="${csrf_token}" />
+    <script src="/topics.js" defer></script>
+    <title>Topics · Intel Sourcerer</title>
+    <link rel="stylesheet" href="/reader.css" />
+  </head>
+  <body>
+    <main class="topics-page topics-list-page">
+      <!-- header: /topics -->
+      <div class="topics-split">
+        <section class="topics-list-pane" aria-label="Topics">
+          <div class="topics-heading">
+            <h1>Topics</h1>
+            <button id="new-topic-open" type="button" class="primary">Create topic</button>
+          </div>
+          <div class="lib-toolbar">
+            <form action="/topics" class="lib-search">
+              <label class="sr-only" for="topic-search">Search topics, notes and indicators</label>
+              <input id="topic-search" type="search" name="q" value="${query}" placeholder="Search topics, notes and indicators" />
+              <input type="hidden" name="status" value="${status}" />
+              <button class="sr-only" type="submit">Search</button>
+            </form>
+            <nav class="lib-tabs" aria-label="Topic filters">
+              <a class="${tracking_class}" href="${tracking_link}">Tracking</a
+              ><a class="${closed_class}" href="${closed_link}">Closed</a
+              ><span>${topic_count}</span>
+            </nav>
+          </div>
+          <div id="topic-rows">${topic_rows}</div>
+        </section>
+        <aside id="topics-stats" class="topics-stats" aria-label="Statistics across tracked topics" hidden>
+          <h2>Across your tracked topics</h2>
+          <div id="stat-figures" class="stat-figures"></div>
+          <figure id="stat-weeks" class="stat-block" hidden>
+            <figcaption><span class="stat-title">Reports per week</span><span id="stat-weeks-total" class="muted"></span></figcaption>
+            <div id="stat-week-bars" class="stat-week-bars" role="img"></div>
+            <div class="stat-axis muted"><span id="stat-week-first"></span><span id="stat-week-last"></span></div>
+          </figure>
+          <section id="stat-busiest" class="stat-block" hidden>
+            <h3 class="stat-title">Busiest topics, last 30 days</h3>
+            <div id="stat-busiest-list" class="stat-bars"></div>
+          </section>
+          <section id="stat-shared" class="stat-block" hidden>
+            <h3 class="stat-title">In more than one topic</h3>
+            <p class="muted">Indicators that may connect these subjects.</p>
+            <div id="stat-shared-list"></div>
+          </section>
+          <section id="stat-single" class="stat-block" hidden>
+            <h3 class="stat-title">Resting on one publisher</h3>
+            <p class="muted">Nothing here corroborates the reporting yet.</p>
+            <div id="stat-single-list"></div>
+          </section>
+          <p id="stat-status" class="muted" hidden></p>
+        </aside>
+      </div>
+    </main>
+    <dialog id="new-topic-dialog" class="lib-dialog" aria-labelledby="new-topic-title">
+      <form id="new-topic-form">
+        <h2 id="new-topic-title">Create topic</h2>
+        <label for="new-topic">Name</label>
+        <input id="new-topic" type="text" maxlength="80" required placeholder="A campaign, actor or CVE" autocomplete="off" />
+        <p id="new-topic-error" role="alert" hidden></p>
+        <div class="lib-dialog-actions">
+          <button id="cancel-new-topic" type="button">Cancel</button>
+          <button type="submit" class="primary">Create topic</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

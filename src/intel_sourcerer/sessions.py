@@ -66,7 +66,7 @@ def clean_notes(text):
             else:tag.wrap(soup.new_tag('mark'))
     for link in soup.find_all('a'):
         href=str(link.get('href','')).strip()
-        if not re.match(r'(https?:|mailto:)',href,re.I):
+        if not re.match(r'(https?:|mailto:|/\?open=)',href,re.I):
             link.unwrap()
             continue
         link.attrs={'href':href,'target':'_blank','rel':'noopener noreferrer'}
@@ -120,6 +120,9 @@ def delete_article(db,url):
     db.execute('DELETE FROM reading_positions WHERE article_url=?',(url,))
     db.execute('DELETE FROM timed_reading_sessions WHERE article_url=?',(url,))
     db.execute('DELETE FROM article_reads WHERE article_url=?',(url,))
+    from .topics import remove_citations
+
+    remove_citations(db,url)
     db.execute('DELETE FROM articles WHERE url=?',(url,))
     return {'deleted':url}
 

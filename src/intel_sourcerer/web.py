@@ -103,6 +103,7 @@ APP_HEAD = (
     '<link rel="apple-touch-icon" href="/icon-192.png" />'
     '<script src="/app.js"></script>'
 )
+ACCOUNT_LINK = '<a href="/account">Account</a>'
 STATIC_FILES = {
     "/app.js": ("shared/app.js", "text/javascript; charset=utf-8"),
     "/sw.js": ("shared/sw.js", "text/javascript; charset=utf-8"),
@@ -220,9 +221,15 @@ def create_server(
     accounts = Accounts(database, config) if auth_enabled else None
     # A localhost server can still be reached through a public viewer or reverse proxy.
     setup_code = os.environ.get("INTEL_SETUP_TOKEN", "").strip()
-    if accounts and accounts.empty() and not setup_code and (api_only or proxies or host not in LOOPBACK_HOSTS):
-        setup_code = secrets.token_urlsafe(18)
-        print(f"First-run setup code, needed once to create the administrator: {setup_code}", flush=True)
+
+    def guard_first_account():
+        """Whoever creates the first account becomes administrator, so a reachable server asks for a code."""
+        nonlocal setup_code
+        if accounts and accounts.empty() and not setup_code and (api_only or proxies or host not in LOOPBACK_HOSTS):
+            setup_code = secrets.token_urlsafe(18)
+            print(f"First-run setup code, needed once to create the administrator: {setup_code}", flush=True)
+
+    guard_first_account()
     upload_slots = threading.BoundedSemaphore(2)
     base_database, base_config, default_csrf = database, config, csrf_token
 
@@ -348,24 +355,19 @@ def create_server(
                 self.respond({"message": error, "page": "account"}, status=status)
                 return
             csrf = escape(self.session["csrf"])
-            content = f'<p>Signed in as <strong>{escape(self.session["username"])}</strong></p><p><a href="/">Back to Intel Sourcerer</a></p><form method="post" action="/auth/logout"><input type="hidden" name="csrf_token" value="{csrf}"><button>Sign out</button></form>'
-            content += render_template("auth/password.html", csrf=csrf)
-            if self.is_admin:
-                content += "<h2>Add an account</h2>" + render_template(
-                    "auth/form.html",
-                    action="/auth/create-user",
-                    csrf=csrf,
-                    autocomplete="new-password",
-                    button="Create account",
-                    setup_field="",
-                )
+            content = render_template("auth/password.html", csrf=csrf)
+            signout = render_template("auth/signout.html", username=escape(self.session["username"]), csrf=csrf)
+            from .stats import render_stats_section, stats_data
+
+            with closing(session_db(self.session["database_path"])) as db:
+                stats = render_stats_section(stats_data(db))
             self.respond(
                 render_template(
-                    "auth/page.html",
-                    title="Account",
-                    description="Each user has a separate library and source settings.",
+                    "auth/account-page.html",
                     error=escape(error),
                     content=content,
+                    stats=stats,
+                    signout=signout,
                 ),
                 "text/html; charset=utf-8",
                 status,
@@ -405,7 +407,7 @@ def create_server(
                         if api_only
                         else self.real_client(),
                     )
-                elif path in {"/auth/logout", "/auth/create-user", "/auth/password"}:
+                elif path in {"/auth/logout", "/auth/create-user", "/auth/password", "/auth/delete-account"}:
                     context = self.context()
                     if not context:
                         return
@@ -418,6 +420,14 @@ def create_server(
                         token, _ = accounts.new_session(session["user_id"])
                         self.cookie(token)
                         self.redirect("/account")
+                        return
+                    if path == "/auth/delete-account":
+                        accounts.delete_account(session["user_id"], username, password)
+                        guard_first_account()
+                        self.pending_cookie = (
+                            "intel_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+                        )
+                        self.redirect("/setup" if accounts.empty() else "/login")
                         return
                     if path == "/auth/create-user":
                         if not self.is_admin:
@@ -443,7 +453,7 @@ def create_server(
                 self.redirect("/")
             except (ValueError, UnicodeError) as exc:
                 if (
-                    path in {"/auth/create-user", "/auth/password"}
+                    path in {"/auth/create-user", "/auth/password", "/auth/delete-account"}
                     and session
                     and session["user_id"]
                 ):
@@ -463,9 +473,10 @@ def create_server(
                         "__USER_ID__", getattr(self, "user_id", "local")
                     )
                     if accounts and getattr(self, "user_id", None):
-                        body = body.replace(
-                            "</nav>", '<a href="/account">Account</a></nav>', 1
-                        )
+                        body = body.replace("<!-- account-link -->", ACCOUNT_LINK)
+                    elif not accounts:
+                        # With no accounts there is no Account page to hold the stats.
+                        body = body.replace("<!-- account-link -->", '<a href="/stats">Stats</a>')
                     body = body.replace("</title>", "</title>" + APP_HEAD, 1)
                 body = body.encode()
             self.send_response(status)
@@ -537,6 +548,10 @@ def create_server(
                 "/focus.js",
                 "/math.js",
                 "/library.js",
+                "/notes-editor.js",
+                "/tag-editor.js",
+                "/account.js",
+                "/topics.js",
                 "/sources.js",
                 "/brand-icon.png",
             } or path.startswith("/vendor/katex/")
@@ -593,6 +608,12 @@ def create_server(
             if path == "/library.js":
                 self.respond(
                     (UI_ROOT / "library/library.js").read_text(),
+                    "text/javascript; charset=utf-8",
+                )
+                return
+            if path in {"/notes-editor.js", "/tag-editor.js", "/topics.js", "/account.js"}:
+                self.respond(
+                    (UI_ROOT / {"/notes-editor.js": "shared/notes-editor.js", "/tag-editor.js": "shared/tag-editor.js", "/topics.js": "topics/topics.js", "/account.js": "auth/account.js"}[path]).read_text(),
                     "text/javascript; charset=utf-8",
                 )
                 return
@@ -669,7 +690,27 @@ def create_server(
                     Path(__file__).with_name("brand-icon.png").read_bytes(), "image/png"
                 )
                 return
+            if path in {"/topics", "/topic"}:
+                from .topics import list_topics, render_topic, render_topics, topic_data
+
+                params = parse_qs(urlsplit(self.path).query)
+                with closing(session_db(database)) as db:
+                    html = (
+                        render_topics(
+                            list_topics(db)["topics"],
+                            params.get("q", [""])[0],
+                            params.get("status", [""])[0],
+                            csrf_token,
+                        )
+                        if path == "/topics"
+                        else render_topic(topic_data(db, params.get("id", [""])[0]), csrf_token)
+                    )
+                self.respond(html, "text/html; charset=utf-8")
+                return
             if path == "/stats":
+                if accounts:
+                    self.redirect("/account")
+                    return
                 from .stats import render_stats
 
                 with closing(session_db(database)) as db:
@@ -767,6 +808,29 @@ def create_server(
                             from .tags import tag_state
 
                             self.respond(tag_state(db, parse_qs(urlsplit(self.path).query).get("url", [""])[0]))
+                        elif path == "/api/topics":
+                            from .topics import list_topics
+
+                            self.respond(list_topics(db))
+                        elif path == "/api/topics-overview":
+                            from .topics import topics_overview
+
+                            self.respond(topics_overview(db))
+                        elif path == "/api/topic":
+                            from .topics import topic_data
+
+                            self.respond(topic_data(db, parse_qs(urlsplit(self.path).query).get("id", [""])[0]))
+                        elif path == "/api/topic-insights":
+                            from .topics import topic_insights
+
+                            self.respond(topic_insights(db, parse_qs(urlsplit(self.path).query).get("id", [""])[0]))
+                        elif path == "/api/article-topics":
+                            from .correlation import refresh_index
+                            from .topics import article_topics
+
+                            url = parse_qs(urlsplit(self.path).query).get("url", [""])[0]
+                            refresh_index(db, url, budget=1)
+                            self.respond(article_topics(db, url))
                         elif path == "/api/related":
                             from .correlation import related_reports
 
@@ -947,7 +1011,7 @@ def create_server(
                         self.respond({"url": url})
                         return
                     data = json.loads(self.rfile.read(length))
-                    if self.path in {"/api/notes", "/api/delete-article"}:
+                    if self.path in {"/api/notes", "/api/delete-article", "/api/topic-notes", "/api/topic-delete"}:
                         backup_database(database)
                     if self.path == "/api/source-status":
                         with discovery_lock:
@@ -1069,6 +1133,42 @@ def create_server(
                             from .tags import remove_tag
 
                             result = remove_tag(db, data.get("url"), data.get("tag"))
+                        elif self.path == "/api/topics":
+                            from .topics import create_topic
+
+                            result = create_topic(db, data.get("name"))
+                        elif self.path == "/api/topic-from-articles":
+                            from .topics import save_articles_as_topic
+
+                            result = save_articles_as_topic(db, data.get("name"), data.get("urls"))
+                        elif self.path == "/api/topic-rename":
+                            from .topics import rename_topic
+
+                            result = rename_topic(db, data.get("id"), data.get("name"))
+                        elif self.path == "/api/topic-status":
+                            from .topics import set_status
+
+                            result = set_status(db, data.get("id"), data.get("status"))
+                        elif self.path == "/api/topic-notes":
+                            from .topics import save_topic_notes
+
+                            result = save_topic_notes(db, data.get("id"), data.get("text"), data.get("revision"))
+                        elif self.path == "/api/topic-delete":
+                            from .topics import delete_topic
+
+                            result = delete_topic(db, data.get("id"))
+                        elif self.path == "/api/topic-dismiss":
+                            from .topics import dismiss_suggestion
+
+                            result = dismiss_suggestion(db, data.get("id"), data.get("url"))
+                        elif self.path == "/api/topic-article":
+                            from .topics import add_article
+
+                            result = add_article(db, data.get("url"), data.get("id"), data.get("name"))
+                        elif self.path == "/api/topic-article-delete":
+                            from .topics import remove_article
+
+                            result = remove_article(db, data.get("url"), data.get("id"))
                         elif self.path == "/api/rename-article":
                             result = rename_article(
                                 db, data.get("url"), data.get("title")

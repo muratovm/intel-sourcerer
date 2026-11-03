@@ -1,22 +1,16 @@
-<div class="lib-detail-heading">
-  <span>YOUR NOTES</span><span>${edited}</span>
-</div>
-<h2>${title}</h2>
-<p class="muted">
+<p class="lib-detail-meta">
   <span class="format-chip format-${format_class}">${format_label}</span>
   ${publisher} · ${published_date}
 </p>
-<div class="lib-detail-tags">${tags}</div>
-<div class="lib-actions">
-  <a class="lib-open" href="${opened}">Open article</a
-  ><a href="${exported}" download="article-notes.md">Export Markdown</a
-  ><button class="lib-rename" type="button" data-url="${url}">Rename</button
-  ><button
-    class="lib-delete"
-    type="button"
-    data-url="${url}"
-  >
-    Delete article
-  </button>
-</div>
+<h2>${title}</h2>
+<div id="lib-tag-editor" class="tag-editor" data-url="${url}"></div>
 <div class="lib-note-content">${notes}</div>
+<p class="lib-edited">${edited}</p>
+<div class="lib-actions">
+  <a class="lib-open" href="${opened}">Open in reader</a>
+  <a class="lib-export" href="${exported}" download="article-notes.md">Export notes</a>
+</div>
+<div class="lib-manage">
+  <button class="lib-rename" type="button" data-url="${url}">Rename</button>
+  <button class="lib-delete" type="button" data-url="${url}">Delete</button>
+</div>

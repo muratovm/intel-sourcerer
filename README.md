@@ -24,7 +24,7 @@ Every screenshot uses a made-up demo library: the articles, publishers, and indi
 
 ![Library with an article list and a preview of notes and highlights](docs/screenshots/library.png)
 
-**Stats:** your reading year as a heatmap, with pace from timed sessions.
+**Stats:** your reading year as a heatmap, with pace from timed sessions. They sit on your Account page, or at `/stats` when running without accounts.
 
 ![Stats page with a yearly reading heatmap and reading pace figures](docs/screenshots/stats.png)
 
@@ -138,7 +138,7 @@ A bot check is different. It's reported as blocked rather than rate limited, and
 
 Articles are stored as sanitized HTML, which the reader displays, plus Markdown for export and older entries. Code, regex, tables, and math (rendered with KaTeX) survive as written, and PDFs keep their links, bullets, and code lines. Blog header images can be captured from Open Graph/Twitter metadata. Multi-section reports use the enclosing main content when it contains several separate article sections.
 
-Site furniture is removed when an article is saved: tag and topic lists, navigation, share bars, product promos, and related-article cards (`boilerplate.py`). The rules match exact labels and link-only blocks, keep sections such as Footnotes, References, and Acknowledgements, and leave an article alone if they would remove more than half of it. Unusual sites can still leave some clutter. Markdown exports and Library search still use the original text. A category that a listing page ran into a title is also dropped when the article's own heading settles it.
+Site furniture is removed when an article is saved: tag and topic lists, navigation, share bars, product promos, and related-article cards (`boilerplate.py`). Blocks the page itself names as breadcrumbs, sidebars, suggested content, newsletter prompts and the like go first, unless they hold real writing. The other rules match exact labels and link-only blocks, keep sections such as Footnotes, References, and Acknowledgements, and leave an article alone if they would remove more than half of it. Unusual sites can still leave some clutter. Markdown exports are trimmed the same way for articles saved or rebuilt since this was added. Library search still uses the original text. A category that a listing page ran into a title is also dropped when the article's own heading settles it.
 
 ```sh
 # Re-fetch and re-parse articles that have no clean HTML yet (--all for every article)
@@ -198,6 +198,8 @@ The reader's **IOCs** panel lists what it finds in the article text, each group 
 - **File names**, including defanged ones and names inside paths. Everyday tools such as `cmd.exe` sit in their own group, so Copy all gives you just the samples.
 
 Markdown exports include an Indicators section. Everything is found by pattern with no network lookups, so check values in context: a mention isn't a finding, and a hash-shaped value may not be a file hash. Copy all copies IDs without names.
+
+**Topics** group articles on one subject, such as an exploit or campaign, and hold notes about the whole group. Add an article from the Topics panel while reading, or from the topic page by searching your Library or pasting a URL. A topic lists its articles oldest first, so you can follow how the story developed, and shows the indicators across them with how many articles mention each. "Might belong here" suggests Library articles that share an indicator, using the same rules as Related reports. **Cite an article** links a note to its source; deleting that article keeps the text and removes the link. Dismiss a suggestion and it stays gone for that topic. The Topics page lists what's waiting on each topic, and beside the list shows statistics across tracked topics: reports per week, the busiest topics, indicators found in more than one topic (hashes, CVEs and file names, not techniques), and topics resting on one publisher. Deleting a topic keeps its articles. In the Queue builder, **Save as topic** keeps the list you've built under a name, and the Topic filter pulls a topic's articles into a queue, including older ones outside the chosen timeframe. Tags stay separate: they're quick labels, while a topic is a collection you keep notes on and can close.
 
 **Related reports** links articles in your library that share indicators. A report is listed when it shares a hash, CVE, or file name, or at least three ATT&CK techniques. Reports from other publishers come first, since they corroborate rather than repeat, then the strongest evidence. Each value in the IOCs panel also shows how many other reports mention it (for example `+3`), and selecting that lists them. Everyday tools are left out of matching. A shared value means two reports mention the same thing, not that they describe the same activity, and newsletters that repeat a table will link to each other. The index lives in your database, is built the first time you open an article, and updates itself when articles change.
 

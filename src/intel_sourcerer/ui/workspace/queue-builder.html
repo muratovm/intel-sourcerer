@@ -1,16 +1,5 @@
     <main id="setup" class="queue-builder" hidden>
-      <header class="builder-header">
-        <div class="brand">
-          <img class="brand-icon" src="/brand-icon.png" alt="" />Intel Sourcerer
-        </div>
-        <nav class="builder-links" aria-label="Main navigation">
-          <time id="builder-date" class="muted"></time><a href="/">Home</a
-          ><a href="/?view=builder" class="active" aria-current="page"
-            >Queue builder</a
-          ><a href="/library">Library</a><a href="/sources">Sources</a
-          ><a href="/stats">Stats</a>
-        </nav>
-      </header>
+      <!-- header: /?view=builder -->
       <div class="builder-columns">
         <section class="discovery-pane">
           <form id="discovery-form" class="discovery-controls">
@@ -24,6 +13,10 @@
                 aria-label="Source" /><datalist
                 id="source-options"
               ></datalist></label
+            ><label id="article-topic-field" hidden
+              >Topic<select id="article-topic">
+                <option value="">All articles</option>
+              </select></label
             ><label
               >Article type<select id="article-type">
                 <option>All</option>
@@ -76,7 +69,10 @@
           ></p>
           <div class="saved-articles-head">
             <h2 class="saved-articles-title">Saved articles</h2>
-            <div id="result-count" class="muted"></div>
+            <div class="saved-articles-tools">
+              <button id="add-all" type="button" hidden></button>
+              <div id="result-count" class="muted"></div>
+            </div>
           </div>
           <div id="discovery-results"></div>
         </section>
@@ -117,6 +113,23 @@
               Start reading
             </button>
           </form>
+          <button id="save-topic-open" class="text-action" type="button" hidden>Save as topic</button>
+          <form id="save-topic-form" class="link-form" hidden>
+            <label class="sr-only" for="save-topic-name">Topic name</label
+            ><input
+              id="save-topic-name"
+              type="text"
+              list="save-topic-names"
+              maxlength="80"
+              placeholder="Name this topic, or pick one to add to"
+              autocomplete="off"
+              required
+            /><datalist id="save-topic-names"></datalist
+            ><button type="submit">Save</button>
+          </form>
+          <p id="save-topic-status" class="muted" role="status" aria-live="polite" hidden>
+            <span></span> <a id="save-topic-link"></a>
+          </p>
         </aside>
       </div>
     </main>

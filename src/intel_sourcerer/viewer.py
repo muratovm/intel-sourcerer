@@ -11,7 +11,7 @@ import os
 import threading
 from html import escape
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 
@@ -25,6 +25,10 @@ STATIC_FILES = {
     "/focus.js": ("workspace/focus.js", "text/javascript; charset=utf-8"),
     "/math.js": ("workspace/math.js", "text/javascript; charset=utf-8"),
     "/library.js": ("library/library.js", "text/javascript; charset=utf-8"),
+    "/notes-editor.js": ("shared/notes-editor.js", "text/javascript; charset=utf-8"),
+    "/tag-editor.js": ("shared/tag-editor.js", "text/javascript; charset=utf-8"),
+    "/topics.js": ("topics/topics.js", "text/javascript; charset=utf-8"),
+    "/account.js": ("auth/account.js", "text/javascript; charset=utf-8"),
     "/sources.js": ("sources/sources.js", "text/javascript; charset=utf-8"),
     "/vendor/katex/katex.min.js": (
         "vendor/katex/katex.min.js",
@@ -198,30 +202,20 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
         def render_account(self, session, message="", status=200):
             user = session["user"]
             csrf = escape(session["csrf_token"], quote=True)
-            create_user = ""
-            if user["admin"]:
-                create_user = "<h2>Add an account</h2>" + render_template(
-                    "auth/form.html",
-                    action="/auth/create-user",
-                    csrf=csrf,
-                    autocomplete="new-password",
-                    button="Create account",
-                    setup_field="",
-                )
-            content = render_template(
-                "auth/account.html",
-                username=escape(user["username"]),
-                csrf=csrf,
-                password_form=render_template("auth/password.html", csrf=csrf),
-                create_user_form=create_user,
-            )
+            content = render_template("auth/password.html", csrf=csrf)
+            signout = render_template("auth/signout.html", username=escape(user["username"]), csrf=csrf)
+            from .stats import render_stats_section
+
+            data = self.model("/api/stats")
+            if data is None:
+                return
             self.reply(
                 render_template(
-                    "auth/page.html",
-                    title="Account",
-                    description="Each user has a separate library and source settings.",
+                    "auth/account-page.html",
                     error=escape(message),
                     content=content,
+                    stats=render_stats_section(data),
+                    signout=signout,
                 ),
                 status,
             )
@@ -230,7 +224,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
             user = session["user"]
             html = html.replace("__TOKEN__", escape(session["csrf_token"], quote=True))
             html = html.replace("__USER_ID__", escape(user["id"], quote=True))
-            html = html.replace("</nav>", '<a href="/account">Account</a></nav>')
+            html = html.replace("<!-- account-link -->", '<a href="/account">Account</a>')
             self.reply(html)
 
         def unavailable(self):
@@ -292,6 +286,8 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                 "/setup",
                 "/account",
                 "/library",
+                "/topics",
+                "/topic",
                 "/sources",
                 "/stats",
             }:
@@ -333,6 +329,25 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                     session["csrf_token"],
                     params.get("tag", [""])[0],
                 )
+            elif path == "/topics":
+                from .topics import render_topics
+
+                data = self.model("/api/topics")
+                if data is None:
+                    return
+                html = render_topics(
+                    data["topics"],
+                    params.get("q", [""])[0],
+                    params.get("status", [""])[0],
+                    session["csrf_token"],
+                )
+            elif path == "/topic":
+                from .topics import render_topic
+
+                data = self.model("/api/topic?" + urlencode({"id": params.get("id", [""])[0]}))
+                if data is None:
+                    return
+                html = render_topic(data, session["csrf_token"])
             elif path == "/sources":
                 from .config import PublisherSource
                 from .source_view import render_sources_list
@@ -345,12 +360,8 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                     session["csrf_token"],
                 )
             else:
-                from .stats import render_stats_data
-
-                data = self.model("/api/stats")
-                if data is None:
-                    return
-                html = render_stats_data(data)
+                self.redirect("/account")
+                return
             self.page(html, session)
 
         def prepare_guest(self):

@@ -1,7 +1,7 @@
 "use strict";
 // Network first: the server stays the source of truth, and the cache only answers when it can't be reached.
 const CACHE = "intel-sourcerer-v1";
-const SHELL = ["/reader.css", "/reader.js", "/focus.js", "/math.js", "/app.js", "/library.js", "/brand-icon.png", "/vendor/katex/katex.min.js", "/vendor/katex/auto-render.min.js"];
+const SHELL = ["/reader.css", "/notes-editor.js", "/tag-editor.js", "/reader.js", "/focus.js", "/math.js", "/app.js", "/library.js", "/brand-icon.png", "/vendor/katex/katex.min.js", "/vendor/katex/auto-render.min.js"];
 const NEVER = /^\/(guest|temporary|login|setup|account|auth|export|local-media|sw\.js|save)/;
 const OFFLINE_API = /^\/api\/(state|article)$/;
 
@@ -39,7 +39,7 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== location.origin) return;
   if (event.request.method !== "GET") {
     // Cached pages hold account data, so they never outlive the account that saved them.
-    if (["/auth/logout", "/auth/login"].includes(url.pathname)) caches.delete(CACHE);
+    if (["/auth/logout", "/auth/login", "/auth/delete-account"].includes(url.pathname)) caches.delete(CACHE);
     else if (url.pathname.startsWith("/api/"))
       event.respondWith(fetch(event.request).catch(() => offlineJSON("You're offline.")));
     return;

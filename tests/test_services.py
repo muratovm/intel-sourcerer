@@ -102,7 +102,8 @@ def test_separate_viewer_backend_workflow(tmp_path, monkeypatch):
             assert "Private report" in client.get("/library").text
             assert client.get("/sources").status_code == 200
             assert "Test source" in client.get("/sources").text
-            assert client.get("/stats").status_code == 200
+            assert client.get("/stats").headers["location"] == "/account"
+            assert "Your reading year" in client.get("/account").text
             assert (
                 client.get("/api/library").json()["articles"][0]["title"]
                 == "Private report"
@@ -305,6 +306,8 @@ def test_all_viewer_pages_render_without_database_access(tmp_path, monkeypatch):
             ]
         },
         "/api/stats": {"reads": [], "timing": {"sessions": [], "abandoned": 0}},
+        "/api/topics": {"topics": []},
+        "/api/topic": {"topic": None},
     }
 
     def upstream(request):
@@ -323,7 +326,7 @@ def test_all_viewer_pages_render_without_database_access(tmp_path, monkeypatch):
         running(create_viewer("http://backend.example", KEY, 0)) as address,
         real_client(base_url=address) as client,
     ):
-        for page in ["/", "/library", "/sources", "/stats", "/account"]:
+        for page in ["/", "/library", "/topics", "/topic", "/sources", "/account"]:
             response = client.get(page)
             assert response.status_code == 200
         assert "Remote report" in client.get("/library").text

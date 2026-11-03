@@ -5,22 +5,14 @@
     <meta name="user-id" content="__USER_ID__" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="csrf-token" content="${csrf_token}" />
+    <script src="/tag-editor.js" defer></script>
     <script src="/library.js" defer></script>
     <title>Library · Intel Sourcerer</title>
     <link rel="stylesheet" href="/reader.css" />
   </head>
   <body>
     <main class="library-page">
-      <header class="builder-header">
-        <div class="brand">
-          <img class="brand-icon" src="/brand-icon.png" alt="" />Intel Sourcerer
-        </div>
-        <nav class="builder-links" aria-label="Main navigation">
-          <a href="/">Home</a><a href="/?view=builder">Queue builder</a
-          ><a class="active" aria-current="page" href="/library">Library</a
-          ><a href="/sources">Sources</a><a href="/stats">Stats</a>
-        </nav>
-      </header>
+      <!-- header: /library -->
       <div class="lib-title-row">
         <h1>Library</h1>
         <section
@@ -60,10 +52,9 @@
           >All articles</a
         ><a class="${notes_tab_class}" href="${notes_link}"
           >With notes</a
-        ><span>${article_count} articles</span>
+        >${tag_filter}<span>${article_count} articles</span>
       </nav>
       </div>
-      ${tag_filter}
       <div class="lib-workspace">
         <section class="lib-list" aria-label="Saved articles">
           ${article_rows}

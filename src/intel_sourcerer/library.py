@@ -43,6 +43,13 @@ def export_article(db, url):
     return f"# {row['title']}\n\nSource: {url}\n\nPublished: {row['published_at']}\n\n{tag_line}## Notes\n\n{notes}\n\n{highlights}{indicators}## Article\n\n{row['content_markdown'] or row['content_text'] or ''}\n"
 
 
+def _row_tags(names):
+    """Enough to recognize a row by, without every tag competing with the title."""
+    shown = "".join(f'<span class="lib-row-tag">{escape(name)}</span>' for name in names[:2])
+    more = f"<span>+{len(names) - 2}</span>" if len(names) > 2 else ""
+    return f'<span class="lib-row-tags">{shown}{more}</span>' if names else '<span class="lib-row-tags" hidden></span>'
+
+
 def render_library(db, query="", notes_only=False, selected="", csrf_token="", tag=""):
     rows = library_rows(db)
     return render_library_rows(rows, query, notes_only, selected, csrf_token, tag)
@@ -105,7 +112,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
         badges = (
             render_template("library/read-badge.html")
             if row["is_read"]
-            else render_template("library/unread-badge.html")
+            else ""
         ) + (
             render_template("library/noted-badge.html")
             if has_notes(row["notes"], row["notes_format"])
@@ -123,7 +130,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
                 format_class=label.lower(),
                 published_date=escape(short_date(row["published_at"])),
                 badges=badges,
-                tags="".join(f'<span class="lib-tag">{escape(name)}</span>' for name in json.loads(row.get("tags_json") or "[]")),
+                tags=_row_tags(json.loads(row.get("tags_json") or "[]")),
             )
         )
     detail = render_template("library/empty.html")
@@ -159,24 +166,31 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             exported=exported,
             url=escape(active["url"], quote=True),
             notes=notes,
-            tags="".join(f'<a class="lib-tag" href="{link(tag=name, selected="")}">{escape(name)}</a>' for name in json.loads(active.get("tags_json") or "[]")),
         )
     all_link = link(notes="0")
     notes_link = link(notes="1")
     # Selecting the active tag again clears the filter.
     tag_links = "".join(
-        f'<a class="lib-tag{" active" if name.casefold() == tag.casefold() else ""}" '
+        f'<a class="lib-tag-option{" active" if name.casefold() == tag.casefold() else ""}" '
         f'{"aria-current=true " if name.casefold() == tag.casefold() else ""}'
         f'href="{link(tag="" if name.casefold() == tag.casefold() else name)}">{escape(name)} <span>{count}</span></a>'
         for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold()))
     )
+    tag_filter = ""
+    if tag_links or tag:
+        summary = f"Tag: {escape(tag)}" if tag else "Tags"
+        clear = f'<a class="lib-tag-clear" aria-label="Clear tag filter" href="{link(tag="")}">×</a>' if tag else ""
+        tag_filter = (
+            f'<details class="lib-tag-menu"><summary>{summary}</summary>'
+            f'<div class="lib-tag-list">{tag_links}</div></details>{clear}'
+        )
     return render_template(
         "library/index.html",
         csrf_token=escape(csrf_token, quote=True),
         query=escape(query, quote=True),
         notes_filter="1" if notes_only else "0",
         tag=escape(tag, quote=True),
-        tag_filter=f'<nav class="lib-tag-filter" aria-label="Filter by tag">{tag_links}</nav>' if tag_links else "",
+        tag_filter=tag_filter,
         all_tab_class="active" if not notes_only else "",
         all_link=all_link,
         notes_tab_class="active" if notes_only else "",

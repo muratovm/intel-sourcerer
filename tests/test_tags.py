@@ -105,7 +105,22 @@ def test_library_links_keep_the_tag_and_active_tag_clears(db):
     page = render_library(db, tag='a b')
     assert 'tag=a+b' in page
     assert 'name="tag" value="a b"' in page
-    assert 'class="lib-tag active" aria-current=true href="/library?q=&amp;notes=0&amp;tag="' in page
+    assert 'class="lib-tag-option active" aria-current=true href="/library?q=&amp;notes=0&amp;tag="' in page
+    assert 'Tag: a b' in page and 'aria-label="Clear tag filter"' in page
+
+
+def test_library_rows_show_two_tags_and_a_count(db):
+    first = save(db, 'first')
+    for name in ['one', 'three', 'two', '<b>']:
+        add_tag(db, first, name)
+    page = render_library(db)
+    assert '<span class="lib-row-tags"><span class="lib-row-tag">&lt;b&gt;</span><span class="lib-row-tag">one</span><span>+2</span></span>' in page
+    assert 'id="lib-tag-editor"' in page
+
+
+def test_library_with_no_tags_has_no_tag_menu(db):
+    save(db, 'first')
+    assert 'lib-tag-menu' not in render_library(db)
 
 
 def test_export_lists_tags(db):
