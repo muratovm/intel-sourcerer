@@ -1,6 +1,7 @@
 """Searchable local article and notes library."""
 
 import json
+from pathlib import Path
 from datetime import datetime
 
 from .content import format_label, render_markdown
@@ -50,9 +51,38 @@ def _row_tags(names):
     return f'<span class="lib-row-tags">{shown}{more}</span>' if names else '<span class="lib-row-tags" hidden></span>'
 
 
-def render_library(db, query="", notes_only=False, selected="", csrf_token="", tag=""):
+def render_library(db, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None):
     rows = library_rows(db)
-    return render_library_rows(rows, query, notes_only, selected, csrf_token, tag)
+    return render_library_rows(rows, query, notes_only, selected, csrf_token, tag, storage)
+
+
+def _folder_bytes(folder):
+    return sum(f.stat().st_size for f in Path(folder).rglob("*") if f.is_file()) if Path(folder).is_dir() else 0
+
+
+def storage_usage(database):
+    """Bytes this library keeps on disk: the database with its media and assets, and its daily backups apart."""
+    path = Path(database).resolve()
+    stored = sum(p.stat().st_size for p in (path, Path(f"{path}-wal"), Path(f"{path}-shm")) if p.is_file())
+    stored += sum(_folder_bytes(path.parent / name) for name in ("media", "pdf-assets", "uploads"))
+    backups = sum(f.stat().st_size for f in (path.parent / "backups").glob(f"{path.stem}-*.sqlite3") if f.is_file())
+    return {"stored": stored, "backups": backups}
+
+
+def format_size(size):
+    for unit, scale in (("GB", 1e9), ("MB", 1e6)):
+        if size >= scale:
+            return f"{size / scale:.1f} {unit}"
+    return f"{max(size, 0) / 1e6:.2f} MB" if size else "0 MB"
+
+
+def library_summary(total, storage):
+    text = f"{total} {'article' if total == 1 else 'articles'}"
+    if storage:
+        text += f" · {format_size(storage['stored'])} stored"
+        if storage.get("backups"):
+            text += f" · {format_size(storage['backups'])} in backups"
+    return text
 
 
 def library_rows(db):
@@ -65,7 +95,7 @@ def library_rows(db):
     ]
 
 
-def render_library_rows(rows, query="", notes_only=False, selected="", csrf_token="", tag=""):
+def render_library_rows(rows, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None):
     """Render a library from backend JSON without opening a database."""
     from .sessions import clean_notes
 
@@ -196,6 +226,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
         notes_tab_class="active" if notes_only else "",
         notes_link=notes_link,
         article_count=len(matches),
+        library_summary=escape(library_summary(len(rows), storage)),
         article_rows="".join(items) or '<p class="muted">No results</p>',
         detail=detail,
     )

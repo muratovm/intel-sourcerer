@@ -42,3 +42,33 @@ def test_library_export_notes_and_backup(tmp_path):
     assert queue_state(db)['finished']
     assert not db.execute('SELECT 1 FROM article_reads WHERE article_url=?',(article.url,)).fetchone()
     db.close()
+
+
+def test_library_shows_article_count_and_storage(tmp_path):
+    from intel_sourcerer.library import format_size, library_summary, storage_usage
+    database = tmp_path / 'articles.db'
+    database.write_bytes(b'x' * 2_000_000)
+    (tmp_path / 'media').mkdir()
+    (tmp_path / 'media' / 'talk.mp4').write_bytes(b'x' * 1_500_000)
+    (tmp_path / 'backups').mkdir()
+    (tmp_path / 'backups' / 'articles-2026-11-08.sqlite3').write_bytes(b'x' * 3_000_000)
+    (tmp_path / 'backups' / 'other-2026-11-08.sqlite3').write_bytes(b'x' * 9_000_000)
+    usage = storage_usage(database)
+    assert usage == {'stored': 3_500_000, 'backups': 3_000_000}
+    assert library_summary(12, usage) == '12 articles · 3.5 MB stored · 3.0 MB in backups'
+    assert library_summary(1, None) == '1 article'
+    assert format_size(2_400_000_000) == '2.4 GB' and format_size(0) == '0 MB'
+
+
+def test_backups_keep_only_the_newest_daily_copies(tmp_path):
+    from intel_sourcerer.backups import prune_backups
+    database = tmp_path / 'articles.db'
+    folder = tmp_path / 'backups'; folder.mkdir()
+    for day in ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-08', '2026-11-09']:
+        (folder / f'articles-{day}.sqlite3').write_bytes(b'x')
+    (folder / 'articles-before-cleanup-2026-11-01.sqlite3').write_bytes(b'x')
+    (folder / 'other-2026-10-01.sqlite3').write_bytes(b'x')
+    prune_backups(database)
+    assert sorted(f.name for f in folder.iterdir()) == [
+        'articles-2026-11-03.sqlite3', 'articles-2026-11-08.sqlite3', 'articles-2026-11-09.sqlite3',
+        'articles-before-cleanup-2026-11-01.sqlite3', 'other-2026-10-01.sqlite3']

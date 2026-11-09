@@ -50,6 +50,7 @@ FORWARDED_HEADERS = (
     "Content-Type",
     "X-CSRF-Token",
     "X-Filename",
+    "X-Article-URL",
     "Range",
     "If-Range",
 )
@@ -328,6 +329,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                     params.get("selected", [""])[0],
                     session["csrf_token"],
                     params.get("tag", [""])[0],
+                    data.get("storage"),
                 )
             elif path == "/topics":
                 from .topics import render_topics
@@ -386,7 +388,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                 length = int(self.headers.get("Content-Length", "0"))
                 limit = (
                     100_000_000
-                    if path == "/api/file-upload"
+                    if path in {"/api/file-upload", "/api/transcript-audio"}
                     else 20_000_000
                     if path == "/api/pdf-upload"
                     else 8192
@@ -396,7 +398,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                 if not 0 < length <= limit or "Transfer-Encoding" in self.headers:
                     self.json_error("Invalid request size", 413)
                     return
-                if path in {"/api/file-upload", "/api/pdf-upload"}:
+                if path in {"/api/file-upload", "/api/pdf-upload", "/api/transcript-audio"}:
                     if not self.may_upload():
                         self.json_error("Please sign in.", 401)
                         return

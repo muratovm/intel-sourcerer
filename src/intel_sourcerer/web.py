@@ -114,6 +114,38 @@ STATIC_FILES = {
 }
 
 
+def youtube_download_id(url, is_admin):
+    """The video to download for transcription. Downloads use the owner's Chrome cookies, so only administrators get them."""
+    from . import transcripts
+    from .youtube import video_id
+
+    if not is_admin or not transcripts.downloader_command() or not isinstance(url, str):
+        return None
+    if not url.startswith("https://www.youtube.com/watch?v="):
+        return None
+    try:
+        return video_id(url)
+    except ValueError:
+        return None
+
+
+def transcript_info(database, row, is_admin=False):
+    """What the reader needs to offer, run or show a transcript for audio and video."""
+    if row["content_format"] not in {"audio", "video"}:
+        return None
+    from . import transcripts
+
+    job = transcripts.status(database, row["url"])
+    return dict(
+        available=transcripts.available(),
+        local=transcripts.local_media_path(database, row["url"]) is not None,
+        youtube=youtube_download_id(row["url"], is_admin) is not None,
+        has_transcript=transcripts.has_transcript(row["content_markdown"]),
+        state=job.get("state", ""),
+        error=job.get("error", ""),
+    )
+
+
 def frame_ancestors():
     """Pages that may embed this app. Nothing by default, to protect the login from clickjacking."""
     return os.environ.get("INTEL_SOURCERER_FRAME_ANCESTORS", "'none'")
@@ -565,7 +597,7 @@ def create_server(
                 self.account_page()
                 return
             if path in {"/library", "/export"}:
-                from .library import render_library, export_article
+                from .library import render_library, export_article, storage_usage
 
                 params = parse_qs(urlsplit(self.path).query)
                 with closing(session_db(database)) as db:
@@ -578,6 +610,7 @@ def create_server(
                                 params.get("selected", [""])[0],
                                 csrf_token,
                                 params.get("tag", [""])[0],
+                                storage_usage(database),
                             ),
                             "text/html; charset=utf-8",
                         )
@@ -746,9 +779,9 @@ def create_server(
                 try:
                     with closing(session_db(database)) as db, db:
                         if path == "/api/library":
-                            from .library import library_rows
+                            from .library import library_rows, storage_usage
 
-                            self.respond({"articles": library_rows(db)})
+                            self.respond({"articles": library_rows(db), "storage": storage_usage(database)})
                         elif path == "/api/sources":
                             from dataclasses import asdict
 
@@ -890,6 +923,7 @@ def create_server(
                                     highlights=list_highlights(db, row["url"]),
                                     iocs=extract_iocs(str(soup)),
                                     position=get_position(db, row["url"]),
+                                    transcript=transcript_info(database, row, self.is_admin),
                                 )
                             )
                         else:
@@ -970,7 +1004,7 @@ def create_server(
                         < length
                         <= (
                             100_000_000
-                            if self.path == "/api/file-upload"
+                            if self.path in {"/api/file-upload", "/api/transcript-audio"}
                             else 20_000_000
                             if self.path == "/api/pdf-upload"
                             else 1_000_000
@@ -996,7 +1030,35 @@ def create_server(
                         filename = unquote(self.headers.get("X-Filename", ""))
                         with discovery_lock:
                             url = asyncio.run(import_file(database, payload, filename))
+                        payload = None
+                        from . import transcripts
+
+                        media = transcripts.local_media_path(database, url)
+                        if media and media.suffix.lower() in transcripts.AUDIO_UPLOADS and transcripts.available():
+                            transcripts.start(database, url, media)
                         self.respond({"url": url})
+                        return
+                    if self.path == "/api/transcript-audio":
+                        from . import transcripts
+                        from urllib.parse import unquote
+
+                        url = unquote(self.headers.get("X-Article-URL", ""))
+                        with closing(connect_database(database)) as db:
+                            row = db.execute("SELECT content_format FROM articles WHERE url=?", (url,)).fetchone()
+                        if not row or row[0] not in {"audio", "video"}:
+                            raise ValueError("Attach audio to a saved video or audio item.")
+                        if not transcripts.available():
+                            raise ValueError("Transcription needs mlx_whisper on this machine.")
+                        payload = self.read_upload(length)
+                        if payload is None:
+                            return
+                        if len(payload) != length:
+                            raise ValueError("Incomplete upload")
+                        path = transcripts.save_upload(
+                            database, payload, unquote(self.headers.get("X-Filename", ""))
+                        )
+                        payload = None
+                        self.respond(transcripts.start(database, url, path, remove_after=True))
                         return
                     if self.path == "/api/pdf-upload":
                         from .discovery import import_pdf_upload
@@ -1030,6 +1092,22 @@ def create_server(
                         return
                     if not isinstance(data, dict):
                         raise ValueError("Invalid request")
+                    if self.path == "/api/transcribe":
+                        from . import transcripts
+
+                        url = data.get("url")
+                        media = transcripts.local_media_path(database, url) if isinstance(url, str) else None
+                        video = None if media else youtube_download_id(url, self.is_admin)
+                        if video:
+                            with closing(connect_database(database)) as video_db:
+                                if not video_db.execute("SELECT 1 FROM articles WHERE url=?", (url,)).fetchone():
+                                    raise ValueError("Article not found.")
+                        elif not media:
+                            raise ValueError("Only local audio and video files, or YouTube videos for the administrator, can be transcribed directly.")
+                        if not transcripts.available():
+                            raise ValueError("Transcription needs mlx_whisper on this machine.")
+                        self.respond(transcripts.start(database, url, media, youtube=video))
+                        return
                     if self.path in {"/api/discover", "/api/link"}:
                         if not discovery_lock.acquire(blocking=False):
                             self.respond(

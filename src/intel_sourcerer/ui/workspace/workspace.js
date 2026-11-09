@@ -852,6 +852,7 @@ async function renderQueue() {
   $("article-body").innerHTML = article.body_html;
   applyTextScale();
   renderMedia();
+  renderTranscript();
   window.renderArticleMath?.();
   renderHighlights();
   renderIOCs();
@@ -1581,6 +1582,7 @@ $("load-media").addEventListener("change", () => {
   if (currentArticle) {
     $("article-body").innerHTML = currentArticle.body_html;
     renderMedia();
+    renderTranscript();
     window.renderArticleMath?.();
     renderHighlights();
     $("article-pane").scrollTop = scroll;
@@ -1711,6 +1713,177 @@ function renderMedia() {
       controls.append(label, timestamp);
       media.after(controls);
     }
+  }
+}
+
+// Transcripts: timestamps that seek the player, or a panel to make one with local Whisper.
+let transcriptPoll = null;
+function transcriptSeconds(text) {
+  const parts = text.split(":").map(Number);
+  return parts.reduce((total, part) => total * 60 + part, 0);
+}
+function seekTo(seconds) {
+  const body = $("article-body");
+  const player = body.querySelector("video, audio");
+  if (player) {
+    player.currentTime = seconds;
+    player.play().catch(() => {});
+    player.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    return;
+  }
+  const frame = body.querySelector("iframe.article-media");
+  if (!frame) return;
+  const url = new URL(frame.src);
+  url.searchParams.set("start", String(seconds));
+  url.searchParams.set("autoplay", "1");
+  frame.src = url.href;
+  frame.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function renderTranscript() {
+  clearTimeout(transcriptPoll);
+  const info = currentArticle?.transcript;
+  if (!info) return;
+  const body = $("article-body");
+  if (info.has_transcript) {
+    const heading = [...body.querySelectorAll("h2")].find((h) => h.textContent.trim() === "Transcript");
+    let node = heading?.nextElementSibling;
+    for (; node; node = node.nextElementSibling) {
+      const time = node.firstElementChild;
+      if (node.tagName !== "P" || time?.tagName !== "STRONG" || !/^\d+:\d{2}(:\d{2})?$/.test(time.textContent)) continue;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "transcript-time";
+      button.textContent = time.textContent;
+      button.setAttribute("aria-label", `Play from ${time.textContent}`);
+      button.onclick = () => seekTo(transcriptSeconds(button.textContent));
+      time.replaceWith(button);
+    }
+    return;
+  }
+  if (!info.available) return;
+  const panel = document.createElement("section");
+  panel.className = "transcript-panel";
+  const heading = document.createElement("h2");
+  heading.textContent = "Transcript";
+  const message = document.createElement("p");
+  message.className = "transcript-status";
+  panel.append(heading, message);
+  const busy = ["queued", "downloading", "running"].includes(info.state);
+  if (busy) {
+    message.textContent = {
+      queued: "Waiting for another transcription to finish.",
+      downloading: "Downloading the audio from YouTube. The first time, macOS may ask on the Mac to allow access to Chrome Safe Storage.",
+      running: "Transcribing with Whisper, about a minute for every 10 minutes. You can keep reading.",
+    }[info.state];
+    transcriptPoll = setTimeout(checkTranscript, 5000);
+  } else if (info.local || info.youtube) {
+    message.textContent =
+      info.state === "failed"
+        ? info.error
+        : info.local
+          ? "No transcript yet. Whisper runs on this machine."
+          : "No transcript yet. This downloads the audio with your Chrome cookies and transcribes it on this machine.";
+    const start = document.createElement("button");
+    start.type = "button";
+    start.textContent = info.state === "failed" ? "Try again" : "Transcribe";
+    start.onclick = async () => {
+      start.disabled = true;
+      try {
+        currentArticle.transcript = { ...info, ...(await api("/api/transcribe", { url: currentArticle.url })) };
+        renderTranscript();
+      } catch (error) {
+        message.textContent = error.message;
+        start.disabled = false;
+      }
+    };
+    panel.append(start);
+  } else {
+    const id = new URL(currentArticle.url).searchParams.get("v");
+    message.textContent =
+      info.state === "failed"
+        ? info.error
+        : "Download the audio with your own browser cookies, then attach the file from your Downloads folder. Whisper transcribes it on this machine.";
+    if (id) {
+      const command = document.createElement("code");
+      command.className = "transcript-command";
+      command.textContent = `uvx --from "yt-dlp[default]" yt-dlp -x --audio-format m4a --cookies-from-browser chrome -P ~/Downloads -o "%(id)s.%(ext)s" ${id}`;
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.textContent = "Copy command";
+      copy.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(command.textContent);
+          copy.textContent = "Copied";
+        } catch {
+          copy.textContent = "Select and copy the command";
+        }
+      };
+      panel.append(command, copy);
+    }
+    const pick = document.createElement("label");
+    pick.className = "transcript-attach";
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "audio/*,.m4a,.opus,.webm,.mp4";
+    input.className = "sr-only";
+    pick.append("Attach audio file", input);
+    const upload = async (file) => {
+      if (!file) return;
+      message.textContent = `Uploading ${file.name}…`;
+      try {
+        const response = await fetch("/api/transcript-audio", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-CSRF-Token": token,
+            "X-Filename": encodeURIComponent(file.name),
+            "X-Article-URL": encodeURIComponent(currentArticle.url),
+          },
+          body: file,
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Upload failed.");
+        currentArticle.transcript = { ...info, ...result };
+        renderTranscript();
+      } catch (error) {
+        message.textContent = error.message;
+      }
+    };
+    input.onchange = () => upload(input.files[0]);
+    panel.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      panel.classList.add("is-dragging");
+    });
+    panel.addEventListener("dragleave", () => panel.classList.remove("is-dragging"));
+    panel.addEventListener("drop", (event) => {
+      event.preventDefault();
+      panel.classList.remove("is-dragging");
+      upload(event.dataTransfer.files[0]);
+    });
+    panel.append(pick);
+  }
+  body.querySelector(".transcript-panel")?.remove();
+  body.append(panel);
+}
+async function checkTranscript() {
+  const url = currentArticle?.url;
+  if (!url) return;
+  try {
+    const article = await api("/api/article?" + new URLSearchParams({ url }));
+    if (currentArticle?.url !== url) return;
+    const done = article.transcript?.has_transcript;
+    currentArticle = { ...currentArticle, transcript: article.transcript, body_html: article.body_html, iocs: article.iocs };
+    if (done) {
+      const scroll = $("article-pane").scrollTop;
+      $("article-body").innerHTML = currentArticle.body_html;
+      renderMedia();
+      renderTranscript();
+      renderHighlights();
+      renderIOCs();
+      $("article-pane").scrollTop = scroll;
+    } else renderTranscript();
+  } catch {
+    transcriptPoll = setTimeout(checkTranscript, 15000);
   }
 }
 
