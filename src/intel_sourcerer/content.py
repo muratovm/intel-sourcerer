@@ -25,11 +25,23 @@ def format_label(content_format, publisher=''):
     return FORMAT_LABELS.get(content_format, 'HTML')
 
 
+def split_url(url):
+    """urlsplit, or None for text it cannot parse, such as a malformed IPv6 host like http://[x."""
+    try:
+        return urlsplit(url)
+    except ValueError:
+        return None
+
+
 def safe_url(value, base):
     if value and (re_asset_url(value) or re_local_media(value)):
         return value
-    url = urljoin(base, value or '')
-    return url if value and urlsplit(url).scheme in {'http','https'} else None
+    try:
+        url = urljoin(base, value or '')
+    except ValueError:
+        return None
+    parts = split_url(url)
+    return url if value and parts and parts.scheme in {'http','https'} else None
 
 
 def prepare_article(html, url, math_node):
@@ -437,7 +449,8 @@ def link_plain_urls(html):
             # Citation punctuation may follow a URL; retain balanced URL parentheses.
             while url.endswith(')') and url.count(')') > url.count('('):
                 url = url[:-1]
-            if not urlsplit(url).hostname:
+            parts = split_url(url)
+            if not parts or not parts.hostname:
                 continue
             pieces.append(value[end:match.start()])
             anchor = soup.new_tag('a', href=url)
@@ -452,7 +465,8 @@ def link_plain_urls(html):
                 node.insert_before(piece)
             node.extract()
     for anchor in soup.select('a[href]'):
-        if urlsplit(anchor['href']).scheme in {'http', 'https'}:
+        parts = split_url(anchor['href'])
+        if parts and parts.scheme in {'http', 'https'}:
             anchor['target'] = '_blank'
             anchor['rel'] = 'noopener noreferrer'
     return str(soup)

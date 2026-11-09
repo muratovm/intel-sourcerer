@@ -72,3 +72,10 @@ def test_backups_keep_only_the_newest_daily_copies(tmp_path):
     assert sorted(f.name for f in folder.iterdir()) == [
         'articles-2026-11-03.sqlite3', 'articles-2026-11-08.sqlite3', 'articles-2026-11-09.sqlite3',
         'articles-before-cleanup-2026-11-01.sqlite3', 'other-2026-10-01.sqlite3']
+
+
+def test_malformed_ipv6_links_do_not_break_rendering():
+    from intel_sourcerer.content import render_article_html, safe_url
+    html = render_article_html('<p>See http://[fe80::1 and <a href="http://[bad">this</a> and https://example.com/a.</p>')
+    assert 'href="https://example.com/a"' in html and 'http://[fe80::1' in html
+    assert safe_url('http://[bad', 'https://example.com/') is None
