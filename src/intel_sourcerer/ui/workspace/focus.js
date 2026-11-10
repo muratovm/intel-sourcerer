@@ -134,10 +134,7 @@
   document.addEventListener("reader-article", async (event) => {
     article = event.detail;
     message("");
-    element("focus-minutes").value = Math.max(
-      1,
-      parseInt(readingTimeLabel(article).replace("~", ""), 10),
-    );
+    element("focus-minutes").value = focusMinutes(article);
     try {
       await request();
       if (

@@ -209,9 +209,11 @@ if (tagBox) {
       tagBox.hidden = true;
     });
 }
-const tagMenu = document.querySelector(".lib-tag-menu");
+// Tag and type menus close on an outside click, and opening one closes the other.
+const filterMenus = document.querySelectorAll(".lib-tag-menu");
 document.addEventListener("click", (event) => {
-  if (tagMenu?.open && !tagMenu.contains(event.target)) tagMenu.open = false;
+  for (const menu of filterMenus)
+    if (menu.open && !menu.contains(event.target)) menu.open = false;
 });
 const articleList = document.querySelector(".lib-list"),
   selectedArticle = articleList?.querySelector(".lib-item.selected");

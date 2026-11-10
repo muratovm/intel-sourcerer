@@ -764,9 +764,7 @@ $("queue-form").onsubmit = async (event) => {
   }
 };
 // Estimate prose reading time at 200 words per minute; exclude media placeholders.
-function readingTimeLabel(article) {
-  if (["audio", "video"].includes(article.content_format)) return article.content_format === "audio" ? "Audio" : "Video";
-  if (article.url.startsWith("https://www.youtube.com/watch?v=")) return "Video";
+function proseMinutes(article) {
   const body = document.createElement("div");
   body.innerHTML = article.body_html;
   body
@@ -776,7 +774,29 @@ function readingTimeLabel(article) {
     .trim()
     .split(/\s+/)
     .filter(Boolean).length;
-  return `~${Math.max(1, Math.ceil(words / 200))} min read`;
+  return Math.max(1, Math.ceil(words / 200));
+}
+
+// Minutes the focus timer starts at: the text to read, or the length of untranscribed media.
+function focusMinutes(article) {
+  const media = ["audio", "video"].includes(article.content_format) || article.url.startsWith("https://www.youtube.com/watch?v=");
+  if (media && !article.transcript?.has_transcript)
+    return article.duration ? Math.max(1, Math.round(article.duration / 60)) : 1;
+  return proseMinutes(article);
+}
+
+// Audio and video show their saved length, plus the transcript's reading time once there is one.
+function readingTimeLabel(article) {
+  const media = ["audio", "video"].includes(article.content_format)
+    ? article.content_format
+    : article.url.startsWith("https://www.youtube.com/watch?v=") ? "video" : "";
+  if (!media) return `~${proseMinutes(article)} min read`;
+  const length = article.duration
+    ? `${Math.max(1, Math.round(article.duration / 60))} min ${media}`
+    : media === "audio" ? "Audio" : "Video";
+  return article.transcript?.has_transcript
+    ? `${length} · ~${proseMinutes(article)} min read`
+    : length;
 }
 
 function readerMetadata(article) {

@@ -21,6 +21,56 @@ def short_date(value):
     return f"{date:%b} {date.day}, {date.year}"
 
 
+def format_length(seconds):
+    minutes = max(1, round(seconds / 60))
+    return f"{minutes // 60} h {minutes % 60:02d} min" if minutes >= 60 else f"{minutes} min"
+
+
+def _host(url):
+    from urllib.parse import urlsplit
+    parts = urlsplit(url or "")
+    return (parts.hostname or "").removeprefix("www.") if parts.scheme in {"http", "https"} else ""
+
+
+def resource_details(row):
+    """Facts about the selected item for the library's side panel: length, maker, transcript, topics, source."""
+    from .content import reading_word_count
+    from .transcripts import has_transcript
+    from .youtube import video_duration
+
+    media = row["content_format"] in {"audio", "video"} or row["url"].startswith("https://www.youtube.com/watch?v=")
+    transcribed = has_transcript(row.get("content_markdown"))
+    words = reading_word_count(row.get("content_markdown"), row.get("content_text") or "", row.get("content_html")) if not media or transcribed else 0
+    read = f"~{max(1, -(-words // 200))} min read · {words:,} words" if words else ""
+    facts = []
+    if media:
+        duration = video_duration(row.get("media_json"))
+        facts.append(("Length", format_length(duration) if duration else "Unknown"))
+        facts.append(("Transcript", read if transcribed else "Not transcribed yet"))
+    elif read:
+        facts.append(("Length", read))
+    author = (row.get("author") or "").strip()
+    if not author and media:
+        # Videos saved before the channel reached the author column keep it on a "Channel:" line.
+        import re
+        found = re.search(r"^Channel: (.+)$", row.get("content_markdown") or "", re.M)
+        author = found[1].strip() if found else ""
+    if author and author.casefold() != (row.get("publisher") or "").casefold():
+        facts.append(("Channel" if media else "Author", escape(author)))
+    topics = [t for t in json.loads(row.get("topics_json") or "[]") if isinstance(t, dict) and t.get("id")]
+    if topics:
+        facts.append(("Topics", ", ".join(
+            f'<a href="{escape("/topic?" + urlencode({"id": t["id"]}), quote=True)}">{escape(t["name"])}</a>' for t in topics)))
+    facts.append(("Status", "Read" if row.get("is_read") else "Unread"))
+    if row.get("discovered_at"):
+        facts.append(("Added", escape(short_date(row["discovered_at"]))))
+    host = _host(row["url"])
+    if host:
+        facts.append(("Source", f'<a href="{escape(row["url"], quote=True)}" target="_blank" rel="noopener noreferrer">{escape(host)} ↗</a>'))
+    rows = "".join(f"<dt>{label}</dt><dd>{value}</dd>" for label, value in facts)
+    return f'<dl class="lib-facts">{rows}</dl>'
+
+
 def _checklist_text(html):
     """Markdown has no tick boxes of its own, so items export in the usual [ ] and [x] form."""
     soup = BeautifulSoup(html, "html.parser")
@@ -51,9 +101,9 @@ def _row_tags(names):
     return f'<span class="lib-row-tags">{shown}{more}</span>' if names else '<span class="lib-row-tags" hidden></span>'
 
 
-def render_library(db, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None):
+def render_library(db, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None, kind=""):
     rows = library_rows(db)
-    return render_library_rows(rows, query, notes_only, selected, csrf_token, tag, storage)
+    return render_library_rows(rows, query, notes_only, selected, csrf_token, tag, storage, kind)
 
 
 def _folder_bytes(folder):
@@ -90,24 +140,32 @@ def library_rows(db):
     return [
         dict(row)
         for row in db.execute(
-            "SELECT a.*,s.name AS publisher,(SELECT json_group_array(h.quote) FROM (SELECT quote FROM article_highlights WHERE article_url=a.url ORDER BY created_at,id) h) AS highlights_json,(SELECT json_group_array(t.tag) FROM (SELECT tag FROM article_tags WHERE article_url=a.url ORDER BY tag COLLATE NOCASE) t) AS tags_json FROM articles a JOIN sources s ON s.id=a.source_id ORDER BY julianday(a.published_at) DESC,a.title COLLATE NOCASE,a.url"
+            "SELECT a.*,s.name AS publisher,(SELECT json_group_array(h.quote) FROM (SELECT quote FROM article_highlights WHERE article_url=a.url ORDER BY created_at,id) h) AS highlights_json,(SELECT json_group_array(t.tag) FROM (SELECT tag FROM article_tags WHERE article_url=a.url ORDER BY tag COLLATE NOCASE) t) AS tags_json,(SELECT json_group_array(json_object('id',p.id,'name',p.name)) FROM (SELECT tp.id,tp.name FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=a.url ORDER BY tp.name COLLATE NOCASE) p) AS topics_json FROM articles a JOIN sources s ON s.id=a.source_id ORDER BY julianday(a.published_at) DESC,a.title COLLATE NOCASE,a.url"
         )
     ]
 
 
-def render_library_rows(rows, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None):
+def _kind(row):
+    return format_label(row["content_format"], row["publisher"])
+
+
+def render_library_rows(rows, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None, kind=""):
     """Render a library from backend JSON without opening a database."""
     from .sessions import clean_notes
 
     terms = query.casefold().split()
     matches = []
     counts = {}
+    kinds = {}
     for row in rows:
+        kinds[_kind(row)] = kinds.get(_kind(row), 0) + 1
         for name in json.loads(row.get("tags_json") or "[]"):
             counts[name] = counts.get(name, 0) + 1
     for row in rows:
         tags = json.loads(row.get("tags_json") or "[]")
         if tag and tag.casefold() not in {name.casefold() for name in tags}:
+            continue
+        if kind and _kind(row).casefold() != kind.casefold():
             continue
         notes = (
             BeautifulSoup(row["notes"], "html.parser").get_text(" ", strip=True)
@@ -132,7 +190,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
     def link(**kwargs):
         return escape(
             "/library?"
-            + urlencode(dict(dict(q=query, notes="1" if notes_only else "0", tag=tag), **kwargs)),
+            + urlencode(dict(dict(q=query, notes="1" if notes_only else "0", tag=tag, type=kind), **kwargs)),
             quote=True,
         )
 
@@ -196,6 +254,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             exported=exported,
             url=escape(active["url"], quote=True),
             notes=notes,
+            details=resource_details(active),
         )
     all_link = link(notes="0")
     notes_link = link(notes="1")
@@ -214,6 +273,21 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             f'<details class="lib-tag-menu"><summary>{summary}</summary>'
             f'<div class="lib-tag-list">{tag_links}</div></details>{clear}'
         )
+    # The same menu shape as tags; picking the active type again shows every type.
+    kind_links = "".join(
+        f'<a class="lib-tag-option{" active" if name.casefold() == kind.casefold() else ""}" '
+        f'{"aria-current=true " if name.casefold() == kind.casefold() else ""}'
+        f'href="{link(type="" if name.casefold() == kind.casefold() else name)}">{escape(name)} <span>{count}</span></a>'
+        for name, count in sorted(kinds.items(), key=lambda item: (-item[1], item[0].casefold()))
+    )
+    kind_filter = ""
+    if len(kinds) > 1 or kind:
+        summary = f"Type: {escape(kind)}" if kind else "Type"
+        clear = f'<a class="lib-tag-clear" aria-label="Clear type filter" href="{link(type="")}">×</a>' if kind else ""
+        kind_filter = (
+            f'<details class="lib-tag-menu lib-type-menu"><summary>{summary}</summary>'
+            f'<div class="lib-tag-list">{kind_links}</div></details>{clear}'
+        )
     return render_template(
         "library/index.html",
         csrf_token=escape(csrf_token, quote=True),
@@ -221,11 +295,12 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
         notes_filter="1" if notes_only else "0",
         tag=escape(tag, quote=True),
         tag_filter=tag_filter,
+        kind=escape(kind, quote=True),
+        kind_filter=kind_filter,
         all_tab_class="active" if not notes_only else "",
         all_link=all_link,
         notes_tab_class="active" if notes_only else "",
         notes_link=notes_link,
-        article_count=len(matches),
         library_summary=escape(library_summary(len(rows), storage)),
         article_rows="".join(items) or '<p class="muted">No results</p>',
         detail=detail,

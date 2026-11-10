@@ -3462,6 +3462,11 @@ h3.stat-title + .stat-bars { margin-top: 10px; }
 .lib-detail-meta .format-chip { margin-right: 6px; }
 .lib-detail h2 { margin: 0 0 16px; font-size: 22px; line-height: 1.25; font-weight: 700; }
 .lib-detail #lib-tag-editor { margin: 0 0 12px; }
+.lib-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 0 18px; font-size: 14px; line-height: 1.4; }
+.lib-facts dt { color: var(--muted); }
+.lib-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
+.lib-facts a { color: inherit; text-decoration: underline; text-decoration-color: var(--hex-c6d1e2); text-underline-offset: 2px; }
+.lib-facts a:hover { text-decoration-color: currentColor; }
 .lib-detail .lib-note-content { padding-top: 0; margin-bottom: 20px; color: var(--hex-2b4063); font-size: 15px; line-height: 1.6; }
 .lib-note-content > .muted { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
 .lib-note-content > .lib-highlights-heading:first-child { margin-top: 0; }
@@ -3511,3 +3516,6 @@ h3.stat-title + .stat-bars { margin-top: 10px; }
 
 .lib-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; }
 .lib-summary { margin: 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Library filters: each label stays on one line; the row wraps instead. */
+.lib-tabs { flex-wrap: wrap; }
+.lib-tabs a, .lib-tabs .lib-tag-menu summary { white-space: nowrap; }

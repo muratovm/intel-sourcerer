@@ -48,14 +48,14 @@
           type="hidden"
           name="notes"
           value="${notes_filter}"
-        /><input type="hidden" name="tag" value="${tag}" /><button class="sr-only" type="submit">Search</button>
+        /><input type="hidden" name="tag" value="${tag}" /><input type="hidden" name="type" value="${kind}" /><button class="sr-only" type="submit">Search</button>
       </form>
       <nav class="lib-tabs" aria-label="Library filters">
         <a class="${all_tab_class}" href="${all_link}"
           >All articles</a
         ><a class="${notes_tab_class}" href="${notes_link}"
           >With notes</a
-        >${tag_filter}<span>${article_count} articles</span>
+        >${tag_filter}${kind_filter}
       </nav>
       </div>
       <div class="lib-workspace">

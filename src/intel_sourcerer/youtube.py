@@ -72,19 +72,101 @@ def list_playlist(identifier, limit=500):
         video, title = str(entry.get('id') or ''), str(entry.get('title') or '').strip()
         if re.fullmatch(r'[A-Za-z0-9_-]{11}', video) and title not in UNAVAILABLE:
             videos.append({'id': video, 'title': title or 'YouTube video',
-                           'author': str(entry.get('channel') or entry.get('uploader') or 'YouTube')})
+                           'author': str(entry.get('channel') or entry.get('uploader') or 'YouTube'),
+                           'duration': seconds(entry.get('duration'))})
     return {'title': str(data.get('title') or 'YouTube playlist'), 'videos': videos[:limit]}
 
 
-def save_video(db, identifier, title, author):
+def seconds(value):
+    """A positive whole number of seconds, or None for anything yt-dlp left out or garbled."""
+    try:
+        value = round(float(value))
+    except (TypeError, ValueError):
+        return None
+    return value if 0 < value < 7 * 24 * 3600 else None
+
+
+def video_duration(media_json):
+    """Seconds stored on a video's media entry, or None."""
+    import json
+    try:
+        media = json.loads(media_json or '[]')
+    except ValueError:
+        return None
+    return next((seconds(m.get('duration')) for m in media if isinstance(m, dict) and m.get('kind') == 'video' and seconds(m.get('duration'))), None)
+
+
+def set_duration(db, url, duration):
+    """Record a video's length on its media entry; the schema stays as it is."""
+    import json
+    duration = seconds(duration)
+    row = db.execute('SELECT media_json FROM articles WHERE url=?', (url,)).fetchone()
+    if not duration or not row:
+        return False
+    try:
+        media = json.loads(row[0] or '[]')
+    except ValueError:
+        media = []
+    entry = next((m for m in media if isinstance(m, dict) and m.get('kind') == 'video'), None)
+    if entry is None:
+        return False
+    entry['duration'] = duration
+    db.execute('UPDATE articles SET media_json=? WHERE url=?', (json.dumps(media), url))
+    return True
+
+
+def fetch_durations(identifiers):
+    """{video ID: seconds} read by yt-dlp with the Chrome cookies on this Mac. Nothing is downloaded."""
+    import subprocess
+    from .transcripts import downloader_command, tool_env
+
+    identifiers = [i for i in identifiers if re.fullmatch(r'[A-Za-z0-9_-]{11}', i or '')]
+    command = downloader_command()
+    if not identifiers or not command:
+        return {}
+    result = subprocess.run(
+        [command, '--from', 'yt-dlp[default]', 'yt-dlp', '--skip-download', '--ignore-errors', '--no-playlist',
+         '--cookies-from-browser', 'chrome', '--print', '%(id)s %(duration)s', '--quiet', '--no-warnings',
+         '--', *('https://www.youtube.com/watch?v=' + i for i in identifiers)],
+        capture_output=True, text=True, env=tool_env(command), timeout=60 + 15 * len(identifiers), stdin=subprocess.DEVNULL,
+    )
+    found = {}
+    for line in result.stdout.splitlines():
+        video, _, value = line.strip().partition(' ')
+        if video in identifiers and seconds(value):
+            found[video] = seconds(value)
+    return found
+
+
+def backfill_durations(database, fetcher=None, batch=50):
+    """Fill in the length of every saved YouTube video that has none. Returns how many were filled."""
+    db = connect_database(database)
+    try:
+        rows = db.execute("SELECT url,media_json FROM articles WHERE url LIKE 'https://www.youtube.com/watch?v=%'").fetchall()
+        missing = [row[0].rsplit('=', 1)[1] for row in rows if video_duration(row[1]) is None]
+        filled = 0
+        for start in range(0, len(missing), batch):
+            found = (fetcher or fetch_durations)(missing[start:start + batch])
+            filled += sum(set_duration(db, 'https://www.youtube.com/watch?v=' + v, d) for v, d in found.items())
+            db.commit()
+        return filled
+    finally:
+        db.close()
+
+
+def save_video(db, identifier, title, author, duration=None):
     url = 'https://www.youtube.com/watch?v=' + identifier
     if db.execute('SELECT 1 FROM articles WHERE url=?', (url,)).fetchone():
+        if duration:
+            row = db.execute('SELECT media_json FROM articles WHERE url=?', (url,)).fetchone()
+            if video_duration(row[0]) is None:
+                set_duration(db, url, duration)
         return url
     source = PublisherSource('youtube', 'YouTube', 'https://www.youtube.com', 'manual')
     now = datetime.now(timezone.utc)
     markdown = f'> **Video placeholder:** {title}\n>\n> [Watch on YouTube]({url})\n\nChannel: {author}'
     save_source(db, source)
-    save_article(db, source.id, Article('YouTube', title, url, url, now, author, None, ''), content=f'YouTube video by {author}.', error=None, reason='Manually added YouTube video; date is import time', discovered_at=now.isoformat(), markdown=markdown, media=[{'position':1,'kind':'video','description':title,'url':url}])
+    save_article(db, source.id, Article('YouTube', title, url, url, now, None, author, ''), content=f'YouTube video by {author}.', error=None, reason='Manually added YouTube video; date is import time', discovered_at=now.isoformat(), markdown=markdown, media=[{'position':1,'kind':'video','description':title,'url':url, **({'duration': seconds(duration)} if seconds(duration) else {})}])
     db.execute("UPDATE articles SET content_format='video' WHERE url=?", (url,))
     return url
 
@@ -101,7 +183,7 @@ def import_playlist(database, identifier, lister=None, topic_id=None):
     try:
         if topic_id is not None:
             name = _require_topic(db, topic_id)['name']
-        urls = [save_video(db, v['id'], v['title'], v['author']) for v in playlist['videos']]
+        urls = [save_video(db, v['id'], v['title'], v['author'], v.get('duration')) for v in playlist['videos']]
         topic = save_articles_as_topic(db, name, urls)
         db.commit()
     finally:
@@ -109,7 +191,8 @@ def import_playlist(database, identifier, lister=None, topic_id=None):
     return {'url': urls[-1], 'topic': topic['id'], 'name': topic['name'], 'videos': len(urls), 'added': topic['added']}
 
 
-async def import_video(database, identifier):
+async def import_video(database, identifier, durations=None):
+    """Save one video from YouTube's public oEmbed data. durations, when given, looks up its length (admins only)."""
     url = 'https://www.youtube.com/watch?v=' + identifier
     db = connect_database(database)
     try:
@@ -120,8 +203,21 @@ async def import_video(database, identifier):
             if response.status_code != 200:
                 raise ValueError('YouTube could not provide this video. Check that it is public and available.')
             metadata = response.json()
-        save_video(db, identifier, metadata.get('title') or 'YouTube video', metadata.get('author_name') or 'YouTube')
+        length = None
+        if durations:
+            try:
+                length = durations([identifier]).get(identifier)
+            except Exception:  # a missing length must never block the import
+                length = None
+        save_video(db, identifier, metadata.get('title') or 'YouTube video', metadata.get('author_name') or 'YouTube', length)
         db.commit()
         return url
     finally:
         db.close()
+
+
+if __name__ == '__main__':
+    import sys
+    if len(sys.argv) != 3 or sys.argv[1] != '--backfill-durations':
+        sys.exit('usage: python -m intel_sourcerer.youtube --backfill-durations DATABASE')
+    print(f'Filled in {backfill_durations(sys.argv[2])} video lengths.')

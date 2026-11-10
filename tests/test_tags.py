@@ -105,7 +105,7 @@ def test_library_links_keep_the_tag_and_active_tag_clears(db):
     page = render_library(db, tag='a b')
     assert 'tag=a+b' in page
     assert 'name="tag" value="a b"' in page
-    assert 'class="lib-tag-option active" aria-current=true href="/library?q=&amp;notes=0&amp;tag="' in page
+    assert 'class="lib-tag-option active" aria-current=true href="/library?q=&amp;notes=0&amp;tag=&amp;type="' in page
     assert 'Tag: a b' in page and 'aria-label="Clear tag filter"' in page
 
 

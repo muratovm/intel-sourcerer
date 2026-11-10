@@ -330,6 +330,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                     session["csrf_token"],
                     params.get("tag", [""])[0],
                     data.get("storage"),
+                    params.get("type", [""])[0],
                 )
             elif path == "/topics":
                 from .topics import render_topics

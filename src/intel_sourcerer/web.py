@@ -23,6 +23,7 @@ from bs4 import BeautifulSoup
 
 from .guest_routes import guest_option
 from .iocs import extract_iocs
+from .youtube import video_duration
 from .net_safety import (
     LOOPBACK_HOSTS,
     BoundedHTTPServer,
@@ -611,6 +612,7 @@ def create_server(
                                 csrf_token,
                                 params.get("tag", [""])[0],
                                 storage_usage(database),
+                                params.get("type", [""])[0],
                             ),
                             "text/html; charset=utf-8",
                         )
@@ -924,6 +926,7 @@ def create_server(
                                     iocs=extract_iocs(str(soup)),
                                     position=get_position(db, row["url"]),
                                     transcript=transcript_info(database, row, self.is_admin),
+                                    duration=video_duration(row["media_json"]),
                                 )
                             )
                         else:
@@ -1132,7 +1135,7 @@ def create_server(
                                     raise ValueError(
                                         "Upload local files instead of submitting a server filesystem path."
                                     )
-                                from .youtube import import_playlist, playlist_id
+                                from .youtube import fetch_durations, import_playlist, playlist_id
 
                                 playlist = playlist_id(submitted)
                                 if playlist and not self.is_admin:
@@ -1142,7 +1145,7 @@ def create_server(
                                 result = (
                                     import_playlist(database, playlist, topic_id=data.get("topic"))
                                     if playlist
-                                    else {"url": asyncio.run(import_link(database, data.get("url")))}
+                                    else {"url": asyncio.run(import_link(database, data.get("url"), fetch_durations if self.is_admin else None))}
                                 )
                             else:
                                 days = data.get("days", 30)

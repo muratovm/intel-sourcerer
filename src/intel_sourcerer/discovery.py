@@ -37,13 +37,13 @@ def public_url(url):
     return urldefrag(url)[0]
 
 
-async def import_link(database, url):
+async def import_link(database, url, durations=None):
     if not isinstance(url,str) or len(url)>4096:raise ValueError('Invalid article URL.')
     url=url.strip()
     from .youtube import video_id, import_video
     identifier = video_id(url)
     if identifier:
-        return await import_video(database, identifier)
+        return await import_video(database, identifier, durations)
     from .media_import import AUDIO, VIDEO, SUPPORTED, import_file, save_item, media_markdown
     if urlsplit(url).hostname in {'github.com','www.github.com'}:
         await asyncio.to_thread(public_url,url)

@@ -135,16 +135,19 @@ function selectionFormatState(kind) {
     kind === "bold"
       ? "b,strong"
       : kind === "list"
-        ? "ul:not(.checklist),ol"
-        : kind === "checklist"
-          ? "ul.checklist"
-          : "mark";
-  if (kind === "list" || kind === "checklist") {
+        ? "ul:not(.checklist)"
+        : kind === "numbered"
+          ? "ol"
+          : kind === "checklist"
+            ? "ul.checklist"
+            : "mark";
+  if (["list", "numbered", "checklist"].includes(kind)) {
     const node =
       selection.anchorNode.nodeType === 1
         ? selection.anchorNode
         : selection.anchorNode.parentElement;
-    return !!node.closest(selector);
+    // The nearest list decides, so a bullet inside a numbered item lights only Bulleted list.
+    return node.closest("ul,ol")?.matches(selector) ?? false;
   }
   if (selection.isCollapsed) {
     if (kind === "bold") return document.queryCommandState("bold");
@@ -169,9 +172,9 @@ function selectionFormatState(kind) {
   return found;
 }
 function updateFormatButtons() {
-  for (const kind of ["bold", "highlight", "list", "checklist"]) {
+  for (const kind of ["bold", "highlight", "list", "numbered", "checklist"]) {
     const button = document.querySelector(`[data-format="${kind}"]`);
-    button.setAttribute("aria-pressed", String(selectionFormatState(kind)));
+    button?.setAttribute("aria-pressed", String(selectionFormatState(kind)));
   }
 }
 document.addEventListener("selectionchange", updateFormatButtons);
@@ -265,14 +268,14 @@ function formatSelection(kind) {
   updateFormatButtons();
 }
 // Chrome moves the caret to the start of existing text when it wraps it in a list.
-function toggleNoteList() {
+function toggleNoteList(command = "insertUnorderedList") {
   const selection = window.getSelection(),
     collapsed = selection.isCollapsed,
     prefix = document.createRange();
   prefix.selectNodeContents(noteBox);
   prefix.setEnd(selection.focusNode, selection.focusOffset);
   const caret = prefix.toString().length;
-  document.execCommand("insertUnorderedList");
+  document.execCommand(command);
   if (!collapsed) return;
   // A new empty bullet has no text to land in, and Chrome already put the caret there.
   const focus = selection.focusNode,
@@ -381,6 +384,13 @@ document.querySelectorAll("[data-format]").forEach((button) => {
       const checklist = caretElement()?.closest("ul.checklist");
       if (checklist) plainListItems(checklist);
       else toggleNoteList();
+      noteChanged();
+      updateFormatButtons();
+    } else if (action === "numbered") {
+      // A checklist turns into plain numbered items; Chrome swaps the list type in place.
+      const checklist = caretElement()?.closest("ul.checklist");
+      if (checklist) plainListItems(checklist);
+      toggleNoteList("insertOrderedList");
       noteChanged();
       updateFormatButtons();
     } else if (action === "checklist") {
