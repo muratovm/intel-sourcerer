@@ -51,6 +51,7 @@ const drop = document.getElementById("library-drop"),
   articleURL = document.getElementById("library-url"),
   feedback = document.getElementById("library-feedback");
 let importing = false;
+const isPlaylist = (url) => /^https?:\/\/(www\.|m\.)?youtube\.com\/playlist\?/i.test(url.trim());
 async function addLinks(text) {
   if (importing) return;
   const urls = [
@@ -65,12 +66,16 @@ async function addLinks(text) {
   addButton.disabled = true;
   let added = 0,
     lastURL = null,
+    lastTopic = null,
     errors = [];
   for (const url of urls) {
-    feedback.textContent = `Fetching article ${added + errors.length + 1} of ${urls.length}…`;
+    feedback.textContent = isPlaylist(url)
+      ? "Importing the playlist into a topic. Reading a long playlist can take a minute…"
+      : `Fetching article ${added + errors.length + 1} of ${urls.length}…`;
     try {
       const result = await libraryAPI("/api/link", { url });
       lastURL = result.url;
+      lastTopic = result.topic || lastTopic;
       added++;
     } catch (error) {
       errors.push(error.message);
@@ -86,6 +91,10 @@ async function addLinks(text) {
       refresh.textContent = " View library";
       feedback.append(refresh);
     }
+    return;
+  }
+  if (lastTopic && urls.length === 1) {
+    location.assign("/topic?" + new URLSearchParams({ id: lastTopic }));
     return;
   }
   const destination = new URL("/library", location.origin);

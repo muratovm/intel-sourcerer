@@ -63,7 +63,8 @@
       <form id="new-topic-form">
         <h2 id="new-topic-title">Create topic</h2>
         <label for="new-topic">Name</label>
-        <input id="new-topic" type="text" maxlength="80" required placeholder="A campaign, actor or CVE" autocomplete="off" />
+        <input id="new-topic" type="text" maxlength="300" required placeholder="A campaign, actor or CVE" autocomplete="off" aria-describedby="new-topic-hint" />
+        <p id="new-topic-hint" class="muted">Or paste a YouTube playlist link to make it a topic and import its videos.</p>
         <p id="new-topic-error" role="alert" hidden></p>
         <div class="lib-dialog-actions">
           <button id="cancel-new-topic" type="button">Cancel</button>

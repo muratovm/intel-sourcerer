@@ -1132,11 +1132,18 @@ def create_server(
                                     raise ValueError(
                                         "Upload local files instead of submitting a server filesystem path."
                                     )
-                                result = {
-                                    "url": asyncio.run(
-                                        import_link(database, data.get("url"))
+                                from .youtube import import_playlist, playlist_id
+
+                                playlist = playlist_id(submitted)
+                                if playlist and not self.is_admin:
+                                    raise ValueError(
+                                        "Playlist import reads YouTube with the owner's browser cookies, so only an administrator can use it."
                                     )
-                                }
+                                result = (
+                                    import_playlist(database, playlist, topic_id=data.get("topic"))
+                                    if playlist
+                                    else {"url": asyncio.run(import_link(database, data.get("url")))}
+                                )
                             else:
                                 days = data.get("days", 30)
                                 if type(days) is not int or days not in {

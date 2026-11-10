@@ -39,11 +39,19 @@ if (newTopicDialog) {
   $("cancel-new-topic").addEventListener("click", () => newTopicDialog.close());
   $("new-topic-form").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const value = $("new-topic").value.trim(),
+      save = $("new-topic-form").querySelector('button[type="submit"]');
+    const playlist = /^https?:\/\/(www\.|m\.)?youtube\.com\/playlist\?/i.test(value);
+    $("new-topic-error").hidden = !playlist;
+    $("new-topic-error").textContent = playlist ? "Importing the playlist. Reading a long playlist can take a minute…" : "";
+    if (save) save.disabled = true;
     try {
-      location.assign(topicPage((await api("/api/topics", { name: $("new-topic").value })).id));
+      const result = playlist ? await api("/api/link", { url: value }) : await api("/api/topics", { name: value });
+      location.assign(topicPage(playlist ? result.topic : result.id));
     } catch (error) {
       $("new-topic-error").textContent = error.message;
       $("new-topic-error").hidden = false;
+      if (save) save.disabled = false;
     }
   });
 }
@@ -277,8 +285,11 @@ if (page) {
     saveThen(async () => {
       if (match) await addArticle(match.dataset.url);
       else {
-        $("save-status").textContent = "Fetching article…";
-        await addArticle((await api("/api/link", { url: value })).url);
+        const playlist = /^https?:\/\/(www\.|m\.)?youtube\.com\/playlist\?/i.test(value);
+        $("save-status").textContent = playlist ? "Importing the playlist…" : "Fetching article…";
+        const result = await api("/api/link", playlist ? { url: value, topic: topicId } : { url: value });
+        if (playlist) location.reload();
+        else await addArticle(result.url);
       }
     });
   });
