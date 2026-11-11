@@ -70,7 +70,7 @@ def clean_notes(text):
             link.unwrap()
             continue
         link.attrs={'href':href,'target':'_blank','rel':'noopener noreferrer'}
-    return bleach.clean(str(soup),tags=['p','div','br','strong','b','em','i','mark','blockquote','ul','ol','li','pre','code','a'],attributes=_note_attribute,protocols=['http','https','mailto'],strip=True)
+    return bleach.clean(str(soup),tags=['p','div','br','strong','b','em','i','mark','blockquote','ul','ol','li','pre','code','a','table','thead','tbody','tr','th','td'],attributes=_note_attribute,protocols=['http','https','mailto'],strip=True)
 
 
 def save_notes(db,url,text,revision,format='plain'):

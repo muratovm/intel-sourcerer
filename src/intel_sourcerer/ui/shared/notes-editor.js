@@ -32,6 +32,12 @@ function sanitizeNotes(html) {
         "li",
         "pre",
         "code",
+        "table",
+        "thead",
+        "tbody",
+        "tr",
+        "th",
+        "td",
       ];
     const href = tag === "a" ? noteLink(node) : "";
     const checklist = tag === "ul" && node.classList.contains("checklist"),
@@ -332,6 +338,95 @@ noteBox.addEventListener("input", (event) => {
   const item = caretElement()?.closest("ul.checklist > li");
   if (item && !item.textContent.trim()) delete item.dataset.checked;
 });
+// A 3-column table with a header row; inside a table the button adds a row below instead.
+function emptyRow(cells, tag = "td") {
+  const row = document.createElement("tr");
+  for (let i = 0; i < cells; i++)
+    row.append(Object.assign(document.createElement(tag), { innerHTML: "<br>" }));
+  return row;
+}
+function placeCaret(cell) {
+  const range = document.createRange(),
+    selection = window.getSelection();
+  range.selectNodeContents(cell);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  noteRange = range.cloneRange();
+}
+function insertNoteTable() {
+  const current = caretElement()?.closest("tr");
+  if (current && noteBox.contains(current)) {
+    const row = emptyRow(current.children.length);
+    current.after(row);
+    placeCaret(row.firstElementChild);
+    return;
+  }
+  const head = emptyRow(3, "th").outerHTML,
+    body = emptyRow(3).outerHTML;
+  document.execCommand(
+    "insertHTML",
+    false,
+    `<table><tbody>${head}${body}</tbody></table><div><br></div>`,
+  );
+  const tables = noteBox.querySelectorAll("table"),
+    // The new table is the one just before the caret's new line.
+    table = [...tables].reverse().find((t) => t.querySelector("th") && !t.textContent.trim()) || tables[tables.length - 1];
+  if (table) placeCaret(table.querySelector("th,td"));
+}
+// Tab and Shift+Tab move between cells; Tab in the last cell adds a row.
+function moveTableCell(cell, step) {
+  const table = cell.closest("table"),
+    cells = [...table.querySelectorAll("th,td")],
+    next = cells[cells.indexOf(cell) + step];
+  if (next) placeCaret(next);
+  else if (step > 0) {
+    const row = emptyRow(cell.closest("tr").children.length);
+    (table.tBodies[0] || table).append(row);
+    placeCaret(row.firstElementChild);
+    noteChanged();
+  }
+}
+// Typed arrows become one symbol: -> → , <- ← , => ⇒ , and <-> ↔ . Backspace right after brings the characters back.
+const ARROWS = [["←>", "↔"], ["->", "→"], ["<-", "←"], ["=>", "⇒"]];
+let lastArrow = null;
+noteBox.addEventListener("input", (event) => {
+  if (event.inputType !== "insertText" || !["-", ">"].includes(event.data)) {
+    if (event.inputType) lastArrow = null;
+    return;
+  }
+  const selection = window.getSelection(),
+    node = selection.focusNode,
+    offset = selection.focusOffset;
+  if (!selection.isCollapsed || node?.nodeType !== 3 || node.parentElement.closest("code,pre")) return;
+  const before = node.textContent.slice(0, offset),
+    match = ARROWS.find(([typed]) => before.endsWith(typed));
+  if (!match) return;
+  const [typed, symbol] = match,
+    original = typed === "←>" ? "<->" : typed,
+    range = document.createRange();
+  range.setStart(node, offset - typed.length);
+  range.setEnd(node, offset);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  document.execCommand("insertText", false, symbol);
+  const after = window.getSelection();
+  lastArrow = { node: after.focusNode, offset: after.focusOffset, original };
+});
+function undoArrow() {
+  const selection = window.getSelection();
+  if (!lastArrow || !selection.isCollapsed || selection.focusNode !== lastArrow.node || selection.focusOffset !== lastArrow.offset)
+    return false;
+  const range = document.createRange();
+  range.setStart(lastArrow.node, lastArrow.offset - 1);
+  range.setEnd(lastArrow.node, lastArrow.offset);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  const original = lastArrow.original;
+  lastArrow = null;
+  document.execCommand("insertText", false, original);
+  return true;
+}
 let clearTypingFormat = false;
 noteBox.addEventListener("beforeinput", (event) => {
   if (
@@ -393,6 +488,9 @@ document.querySelectorAll("[data-format]").forEach((button) => {
       toggleNoteList("insertOrderedList");
       noteChanged();
       updateFormatButtons();
+    } else if (action === "table") {
+      insertNoteTable();
+      noteChanged();
     } else if (action === "checklist") {
       toggleChecklist();
       noteChanged();
@@ -401,6 +499,18 @@ document.querySelectorAll("[data-format]").forEach((button) => {
   };
 });
 noteBox.addEventListener("keydown", (event) => {
+  if (event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    const cell = caretElement()?.closest("td,th");
+    if (cell && noteBox.contains(cell)) {
+      event.preventDefault();
+      moveTableCell(cell, event.shiftKey ? -1 : 1);
+      return;
+    }
+  }
+  if (event.key === "Backspace" && undoArrow()) {
+    event.preventDefault();
+    return;
+  }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
     event.preventDefault();
     formatSelection("bold");

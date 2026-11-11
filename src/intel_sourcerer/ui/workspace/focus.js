@@ -75,12 +75,46 @@
     element("focus-message").hidden = !text;
     element("focus-message").textContent = text;
   }
-  async function request(data) {
+  // A pause the app made (tab hidden, article left) is remembered per tab, so coming back resumes it.
+  // A pause you press yourself is not, so it stays paused.
+  const AUTO_KEY = "focus-auto-paused";
+  function markAutoPaused(id) {
+    try {
+      sessionStorage.setItem(AUTO_KEY, String(id));
+    } catch {}
+  }
+  function takeAutoPaused(id) {
+    try {
+      if (sessionStorage.getItem(AUTO_KEY) !== String(id)) return false;
+      sessionStorage.removeItem(AUTO_KEY);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function clearAutoPaused() {
+    try {
+      sessionStorage.removeItem(AUTO_KEY);
+    } catch {}
+  }
+  async function resumeIfAutoPaused() {
+    if (
+      !document.hidden &&
+      article &&
+      session?.status === "paused" &&
+      session.article_url === article.url &&
+      takeAutoPaused(session.id)
+    )
+      await request({ action: "resume", id: session.id });
+  }
+  async function request(data, keepalive = false) {
     const response = await fetch(
       "/api/timer",
       data
         ? {
             method: "POST",
+            // Lets the pause reach the server even when the page is being left.
+            keepalive,
             headers: {
               "Content-Type": "application/json",
               "X-CSRF-Token": document.querySelector('meta[name="csrf-token"]')
@@ -99,6 +133,7 @@
   async function action(name) {
     if (busy) return;
     busy = true;
+    clearAutoPaused();
     render();
     try {
       if (name === "finish") await saveNow();
@@ -127,9 +162,12 @@
       render();
     }
   }
-  window.pauseFocusTimer = async () => {
-    if (session?.status === "running")
-      await request({ action: "pause", id: session.id });
+  window.pauseFocusTimer = async (tabHidden = false) => {
+    if (session?.status !== "running") return;
+    markAutoPaused(session.id);
+    await request({ action: "pause", id: session.id }, true);
+    // A quick switch away and back can return before the pause has saved.
+    if (tabHidden && !document.hidden) await resumeIfAutoPaused();
   };
   document.addEventListener("reader-article", async (event) => {
     article = event.detail;
@@ -143,6 +181,7 @@
         session.status === "running"
       )
         await window.pauseFocusTimer();
+      else await resumeIfAutoPaused();
     } catch (error) {
       message(error.message);
     }
@@ -152,10 +191,11 @@
     action(session?.status === "paused" ? "resume" : "pause");
   element("focus-finish").onclick = () => action("finish");
   element("focus-end").onclick = () => action("abandon");
-  // Switching tabs pauses a session, avoiding accidental background reading time.
+  // Switching tabs pauses a session, avoiding accidental background reading time; coming back resumes it.
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden)
-      window.pauseFocusTimer().catch((error) => message(error.message));
+    (document.hidden ? window.pauseFocusTimer(true) : resumeIfAutoPaused()).catch(
+      (error) => message(error.message),
+    );
   });
   setInterval(render, 250);
 })();
