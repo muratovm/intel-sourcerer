@@ -18,7 +18,7 @@ import trafilatura
 
 from .content import extract_article
 from .config import load_sources
-from .feeds import Article, FeedCache, Refused, fetch_feed, polite_get
+from .feeds import BOT_CHECK_PAUSE, Article, FeedCache, Refused, fetch_feed, polite_get
 from .storage import connect_database, save_article, save_source
 
 TERMS = re.compile(r"cyber|distillation|malicious|misuse|espionage|phishing|ransomware|vulnerabilit|prompt injection|hacking|frontier safeguards", re.I)
@@ -134,6 +134,23 @@ def listing_articles(html, source, page_url):
     return list(articles.values())
 
 
+# Enough words that the feed holds the post itself, not a teaser.
+FEED_TEXT_MIN_WORDS = 150
+# Sources whose article pages answered with a bot check, until when. The feed's own copy is used meanwhile.
+_pages_blocked_until = {}
+
+
+def feed_text(article):
+    """(text, Markdown, media, clean HTML) from the feed's full post, or None when the feed only has a teaser."""
+    if not article.content_html:
+        return None
+    clean_html, markdown, media = extract_article(article.content_html, article.url)
+    text = BeautifulSoup(clean_html, 'html.parser').get_text(' ', strip=True)
+    if len(text.split()) < FEED_TEXT_MIN_WORDS:
+        return None
+    return text, markdown, media, clean_html
+
+
 async def import_articles(config, database, since, until):
     if since >= until:
         raise ValueError('since must precede until')
@@ -197,12 +214,21 @@ async def import_articles(config, database, since, until):
                 saved={row[0] for row in db.execute("SELECT url FROM articles WHERE source_id=? AND content_status='full_text' AND content_html IS NOT NULL",(source.id,))}
                 gate=asyncio.Semaphore(4)
                 refusals=[]
+                blocked=_pages_blocked_until.get(source.id)
+                if blocked and blocked<=now:_pages_blocked_until.pop(source.id,None);blocked=None
+                async def from_feed(article,reason,message):
+                    copy=await asyncio.to_thread(feed_text,article)
+                    if not copy:return article,reason,None,message,None,[],None
+                    text,markdown,media,clean_html=copy
+                    return article,reason,text,None,markdown,media,clean_html
                 async def extract(item):
                     article,reason=item
                     if article.url in saved:return article,reason,None,None,None,[],None
                     async with gate:
+                        # While the site's pages answer with a bot check, read the post from the feed instead.
+                        if blocked:return await from_feed(article,reason,"blocked by the site's bot check")
                         # One refusal speaks for the site, so the rest of the batch leaves it alone.
-                        if refusals:return article,reason,None,refusals[0].message,None,[],None
+                        if refusals:return await from_feed(article,reason,refusals[0].message)
                         try:
                             response=await polite_get(client,article.url)
                             content=await asyncio.to_thread(trafilatura.extract,response.text,include_comments=False,include_tables=True)
@@ -211,10 +237,15 @@ async def import_articles(config, database, since, until):
                             return article,reason,content,None,markdown,media,clean_html
                         except Refused as exc:
                             refusals.append(exc.refusal)
-                            return article,reason,None,exc.refusal.message,None,[],None
+                            return await from_feed(article,reason,exc.refusal.message)
                         except httpx.HTTPError as exc:
                             return article,reason,None,str(exc),None,[],None
                 extracted=await asyncio.gather(*(extract(i) for i in selected))
+                if refusals:
+                    _pages_blocked_until[source.id]=now+timedelta(seconds=refusals[0].pause_seconds)
+                    # The feed itself still answers. When it supplied every blocked post, nothing is lost,
+                    # so the source isn't paused and the next run still reads the feed.
+                    if not any(error for _,_,_,error,*_ in extracted):refusals.clear()
                 refused=refused or next(iter(refusals),None)
                 for article,reason,content,error,markdown,media,clean_html in extracted:
                     stats['selected']+=1

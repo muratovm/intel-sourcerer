@@ -54,6 +54,8 @@ class Article:
     updated_at: datetime | None
     author: str | None
     summary_html: str
+    # The full post when the feed carries one (content:encoded), used when the page itself is blocked.
+    content_html: str = ""
 
 
 @dataclass
@@ -159,6 +161,7 @@ def parse_feed(data: bytes, source: FeedSource, *, base_url: str | None = None) 
             updated_at=_date(entry["updated_parsed"] if "updated_parsed" in entry else None),
             author=entry.get("author"),
             summary_html=entry.get("summary", ""),
+            content_html=next((c.get("value", "") for c in entry.get("content") or [] if "html" in c.get("type", "")), ""),
         ))
     return articles, warnings
 

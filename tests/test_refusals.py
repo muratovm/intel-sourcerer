@@ -196,3 +196,44 @@ def test_adding_a_blocked_link_explains_what_to_do(monkeypatch, tmp_path):
     monkeypatch.setattr(discovery, 'public_only', lambda _client: httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(429, headers=CHALLENGE))))
     with pytest.raises(ValueError, match='bot check.*PDF'):
         asyncio.run(discovery.import_link(tmp_path / 'test.db', 'https://example.com/blocked'))
+
+
+FULL_RSS = (b'''<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><item>
+<title>Ransomware report</title><link>https://example.com/report</link><pubDate>Tue, 15 Sep 2026 10:00:00 GMT</pubDate>
+<description>A short teaser.</description><content:encoded><![CDATA[<h2>Findings</h2>'''
+            + b'<p>The loader decrypts its configuration and contacts the C2 server every hour.</p>' * 20
+            + b''']]></content:encoded></item></channel></rss>''')
+
+
+def test_a_blocked_page_is_read_from_the_feeds_full_post(monkeypatch, tmp_path):
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if str(request.url) == SOURCE.rss_url:
+            return httpx.Response(200, content=FULL_RSS)
+        return httpx.Response(429, headers=CHALLENGE)
+
+    report = run_import(monkeypatch, tmp_path, handler)
+    assert report['errors'] == [] and report['sources'][0]['full_text'] == 1
+    assert state(tmp_path)['paused_until'] is None
+    with connect_database(tmp_path / 'test.db') as db:
+        status, markdown = db.execute('SELECT content_status, content_markdown FROM articles WHERE url=?', (ARTICLE,)).fetchone()
+    assert status == 'full_text' and 'contacts the C2 server' in markdown and 'Findings' in markdown
+    # The next run reads the feed again but leaves the bot-checked pages alone.
+    with connect_database(tmp_path / 'test.db') as db:
+        db.execute("UPDATE articles SET content_status='metadata_only', content_html=NULL")
+    calls.clear()
+    run_import(monkeypatch, tmp_path, handler)
+    assert calls == [SOURCE.rss_url]
+
+
+def test_a_blocked_page_with_only_a_teaser_in_the_feed_still_pauses(monkeypatch, tmp_path):
+    def handler(request):
+        if str(request.url) == SOURCE.rss_url:
+            return httpx.Response(200, content=RSS)
+        return httpx.Response(429, headers=CHALLENGE)
+
+    report = run_import(monkeypatch, tmp_path, handler)
+    assert any('bot check' in error for error in report['errors'])
+    assert state(tmp_path)['paused_until'] is not None
