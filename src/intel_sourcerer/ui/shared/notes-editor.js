@@ -623,3 +623,51 @@ noteBox.addEventListener("paste", (event) => {
   );
   noteChanged();
 });
+
+const CTI_TEMPLATES = {
+  study:
+    "<p><strong>Core Concepts &amp; Mental Model:</strong> </p>" +
+    "<p><strong>Key Takeaways:</strong> </p>" +
+    "<p><strong>Open Questions:</strong></p>" +
+    "<ul class=\"checklist\"><li>What still needs deeper digging?</li></ul><div><br></div>",
+  bluf:
+    "<p><strong>BLUF:</strong> </p>" +
+    "<p><strong>Impact &amp; Scope:</strong> </p>" +
+    "<p><strong>Detection / Telemetry:</strong> </p>" +
+    "<ul class=\"checklist\"><li>Verify exposure / patch status</li><li>Hunt for indicators &amp; TTPs</li></ul><div><br></div>",
+  diamond:
+    "<table><tbody>" +
+    "<tr><th>Facet</th><th>Details</th></tr>" +
+    "<tr><td><strong>Adversary</strong></td><td><br></td></tr>" +
+    "<tr><td><strong>Capability</strong></td><td><br></td></tr>" +
+    "<tr><td><strong>Infrastructure</strong></td><td><br></td></tr>" +
+    "<tr><td><strong>Victim / Target</strong></td><td><br></td></tr>" +
+    "</tbody></table><div><br></div>",
+  detection:
+    "<p><strong>Detection &amp; Hunting Ideas</strong></p>" +
+    "<ul class=\"checklist\">" +
+    "<li>Process / command-line telemetry: </li>" +
+    "<li>Network / DNS / proxy signal: </li>" +
+    "<li>Persistence / registry / file artifact: </li>" +
+    "</ul><div><br></div>",
+};
+
+document.querySelectorAll("[data-template]").forEach((button) => {
+  button.addEventListener("mousedown", (event) => event.preventDefault());
+  button.addEventListener("click", () => {
+    if (busy) return;
+    const html = CTI_TEMPLATES[button.dataset.template];
+    if (!html) return;
+    focusNotes();
+    document.execCommand("insertHTML", false, html);
+    const menu = button.closest("details");
+    if (menu) menu.open = false;
+    noteChanged();
+  });
+});
+
+document.addEventListener("click", (event) => {
+  for (const menu of document.querySelectorAll(".template-menu[open], .export-menu[open], #article-cite-menu[open]")) {
+    if (!menu.contains(event.target)) menu.open = false;
+  }
+});

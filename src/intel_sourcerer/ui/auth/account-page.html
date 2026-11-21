@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="user-id" content="__USER_ID__" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Account · Intel Sourcerer</title>
     <script src="/account.js" defer></script>
@@ -10,14 +11,95 @@
   <body>
     <main class="account-page">
       <!-- header: /account -->
-      <h1 class="account-title">Account</h1>
+      <div class="account-heading">
+        <h1 class="account-title">Account</h1>
+      </div>
+      <p id="account-status" class="account-notice" role="status" ${message_hidden}>${message}</p>
       <div class="account-layout">
-        <section class="account-stats" aria-label="Reading stats">${stats}</section>
-        <section class="auth-card" aria-label="Account settings">
-          <p class="auth-description">Each user has a separate library and source settings.</p>
-          <p class="auth-error" role="alert">${error}</p>
-          ${content}
+        <section class="account-stats" aria-label="Reading stats and data">
+          ${stats}
+          ${ai_panel}
+          ${history_panel}
+          <section class="account-panel" aria-label="Data, backups and export">
+            <h2>Data, backups &amp; export</h2>
+            <dl class="account-kv">
+              <dt>Library database</dt>
+              <dd>${db_size}</dd>
+              <dt>Media &amp; PDFs</dt>
+              <dd>${media_size}</dd>
+              <dt>Daily snapshots</dt>
+              <dd>${backups_label}</dd>
+              <dt>Latest backup</dt>
+              <dd>${latest_backup}</dd>
+            </dl>
+            <div class="account-panel-actions">
+              <form method="post" action="/auth/backup">
+                <input type="hidden" name="csrf_token" value="${csrf}" />
+                <button type="submit">Back up now</button>
+              </form>
+              <a class="account-link-btn" href="/account/backup">Download backup (.sqlite3)</a>
+              <a class="account-link-btn" href="/account/export-notes">Export notes &amp; topics (.zip)</a>
+            </div>
+          </section>
+          <section class="account-panel" aria-label="Quick-save and browser tools">
+            <h2>Quick-save &amp; tools</h2>
+            <div class="account-tool-row">
+              <div>
+                <strong>Save from anywhere</strong>
+                <p class="muted">Browser bookmarklet, Android Share app, and iOS Shortcut setup.</p>
+              </div>
+              <a class="account-link-btn" href="/save">Open setup</a>
+            </div>
+            <div class="account-tool-row">
+              <div>
+                <strong>Offline cache</strong>
+                <p id="account-cache-status" class="muted">Checking cached files…</p>
+              </div>
+              <button id="account-clear-cache" type="button">Clear cache</button>
+            </div>
+          </section>
         </section>
+        <div class="account-sidebar">
+          <section class="account-panel" aria-label="Reading preferences">
+            <h2>Preferences</h2>
+            <div class="account-pref-row">
+              <span>Reader text size</span>
+              <div class="account-scale-controls">
+                <button id="account-text-smaller" type="button" aria-label="Smaller reader text">A−</button>
+                <span id="account-text-value" class="muted">100%</span>
+                <button id="account-text-larger" type="button" aria-label="Larger reader text">A+</button>
+                <button id="account-text-reset" type="button">Reset</button>
+              </div>
+            </div>
+            <div class="account-pref-row">
+              <span>Display timezone</span>
+              <span class="account-pref-value"><code>${timezone_label}</code></span>
+            </div>
+            <p class="muted account-hint">Override timezone via <code>INTEL_TIMEZONE</code>.</p>
+          </section>
+          <section class="account-panel" aria-label="Workspace and integrations status">
+            <h2>Workspace status</h2>
+            <dl class="account-kv">
+              <dt>Library</dt>
+              <dd>${articles_count} articles · ${topics_count} topics · ${noted_count} noted</dd>
+              <dt>AI assist</dt>
+              <dd><span class="account-badge ${ai_badge_class}">${ai_badge}</span> <span class="muted">${ai_detail}</span></dd>
+            </dl>
+          </section>
+          <section class="account-panel" aria-label="Active sessions">
+            <h2>Sessions</h2>
+            <p class="muted">${sessions_label} signed into this account.</p>
+            <form method="post" action="/auth/logout-others" class="account-panel-actions">
+              <input type="hidden" name="csrf_token" value="${csrf}" />
+              <button type="submit" ${logout_others_disabled}>Sign out other devices</button>
+            </form>
+          </section>
+          <section class="auth-card" aria-label="Account settings">
+            <p class="auth-description">Each user has a separate library and source settings.</p>
+            <p class="auth-error" role="alert">${error}</p>
+            ${content}
+          </section>
+        </div>
       </div>
       ${signout}
     </main>

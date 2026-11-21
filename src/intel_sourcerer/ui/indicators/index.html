@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="user-id" content="__USER_ID__" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="csrf-token" content="${csrf_token}" />
+    <script src="/indicators.js" defer></script>
+    <title>Indicators · Intel Sourcerer</title>
+    <link rel="stylesheet" href="/reader.css" />
+  </head>
+  <body>
+    <main class="library-page indicators-page">
+      <!-- header: /indicators -->
+      <div class="lib-title-row">
+        <div class="lib-heading">
+          <h1>Indicators</h1>
+          <p class="lib-summary">${summary}</p>
+        </div>
+      </div>
+      <div class="lib-toolbar ind-toolbar">
+        <form class="lib-search" method="get" action="/indicators">
+          <input type="hidden" name="kind" value="${kind}" />
+          <input type="hidden" name="kev" value="${kev}" />
+          <input type="hidden" name="days" value="${days}" />
+          <input type="hidden" name="sort" value="${sort}" />
+          <label class="sr-only" for="indicator-search">Search indicators</label>
+          <input
+            id="indicator-search"
+            type="search"
+            name="q"
+            value="${query}"
+            placeholder="Search a value, name, or report title"
+          />
+        </form>
+        <nav class="lib-tabs ind-filters" aria-label="Indicator filters">${filters}</nav>
+      </div>
+      <p class="muted indicators-status">${status}</p>
+      <div class="ind-workspace">
+        <section class="ind-list" aria-label="Matched indicators">
+          ${table}
+          ${footer}
+        </section>
+        <aside id="ind-detail" class="ind-detail" aria-label="Selected indicator" aria-live="polite"></aside>
+      </div>
+      ${ignored_section}
+      <script type="application/json" id="ind-data">${details_json}</script>
+    </main>
+  </body>
+</html>

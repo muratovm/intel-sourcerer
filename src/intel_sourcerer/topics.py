@@ -21,7 +21,16 @@ MAX_LISTED = 5
 WEEKS = 12
 BUSY_DAYS = 30
 STATUSES = ("tracking", "closed")
-KIND_LABELS = {"hashes": "Hash", "cves": "CVE", "files": "File", "techniques": "Technique"}
+KIND_LABELS = {
+    "hashes": "Hash",
+    "cves": "CVE",
+    "domains": "Domain",
+    "ips": "IP",
+    "files": "File",
+    "registry": "Registry",
+    "entities": "MITRE",
+    "techniques": "Technique",
+}
 # Everything a topic counts, leaving out articles from sources the reader has switched off.
 MEMBERS = """topic_articles m JOIN articles a ON a.url=m.article_url
     JOIN sources s ON s.id=a.source_id AND s.enabled=1"""
@@ -45,7 +54,7 @@ def _note_text(html):
 def clean_name(name):
     if not isinstance(name, str):
         raise SessionError("Enter a topic name.")
-    name = re.sub(r"\s+", " ", name).strip()
+    name = re.sub(r"\s+", " ", name).strip().lstrip("#").strip()
     if not name or len(name) > MAX_NAME or not name.isprintable():
         raise SessionError(f"Topic names need between 1 and {MAX_NAME} characters.")
     return name
@@ -233,6 +242,7 @@ def list_topics(db):
                 "latest_report": members[-1]["published_at"] if members else "",
                 "indicators": indicators_by_topic.get(tid, []),
                 "urls": [m["url"] for m in members],
+                "unread_urls": [m["url"] for m in members if not m["is_read"]],
             }
         )
     return {"topics": topics}
@@ -302,6 +312,7 @@ def _suggestions(db, topic_id):
         JOIN articles c ON c.url=o.article_url JOIN sources p ON p.id=c.source_id AND p.enabled=1
         WHERE m.topic_id=? AND o.article_url NOT IN (SELECT article_url FROM topic_articles WHERE topic_id=?)
           AND o.article_url NOT IN (SELECT article_url FROM topic_dismissed WHERE topic_id=?)
+          AND NOT EXISTS (SELECT 1 FROM ignored_indicators ig WHERE ig.kind=i.kind AND ig.value=i.value)
         GROUP BY o.article_url,i.kind,i.value""",
         (topic_id, topic_id, topic_id),
     ):
@@ -341,6 +352,7 @@ def topic_insights(db, topic_id):
     rows = db.execute(
         f"""SELECT i.kind,i.value,count(*) AS articles FROM {MEMBERS}
         JOIN article_indicators i ON i.article_url=a.url WHERE m.topic_id=?
+          AND NOT EXISTS (SELECT 1 FROM ignored_indicators ig WHERE ig.kind=i.kind AND ig.value=i.value)
         GROUP BY i.kind,i.value ORDER BY articles DESC,i.kind,i.value""",
         (topic_id,),
     ).fetchall()
@@ -373,6 +385,7 @@ def _tracked_suggestion_counts(db, topic_ids):
         JOIN sources p ON p.id=c.source_id AND p.enabled=1
         WHERE NOT EXISTS (SELECT 1 FROM topic_articles ta WHERE ta.topic_id=m.topic_id AND ta.article_url=o.article_url)
           AND NOT EXISTS (SELECT 1 FROM topic_dismissed td WHERE td.topic_id=m.topic_id AND td.article_url=o.article_url)
+          AND NOT EXISTS (SELECT 1 FROM ignored_indicators ig WHERE ig.kind=i.kind AND ig.value=i.value)
         GROUP BY m.topic_id,o.article_url,i.kind,i.value"""
     ):
         entry = by_pair.setdefault((row["topic_id"], row["url"]), [False, 0])
@@ -415,7 +428,8 @@ def topics_overview(db, today=None):
     for row in db.execute(
         f"""SELECT DISTINCT i.kind,i.value,m.topic_id FROM {MEMBERS}
         JOIN topics t ON t.id=m.topic_id AND t.status='tracking'
-        JOIN article_indicators i ON i.article_url=a.url WHERE i.kind<>'techniques'"""
+        JOIN article_indicators i ON i.article_url=a.url WHERE i.kind<>'techniques'
+          AND NOT EXISTS (SELECT 1 FROM ignored_indicators ig WHERE ig.kind=i.kind AND ig.value=i.value)"""
     ):
         shared.setdefault((row["kind"], row["value"]), []).append(row["topic_id"])
     linked = sorted(
@@ -435,6 +449,10 @@ def topics_overview(db, today=None):
         "busiest": [
             {"id": topic_id, "name": names[topic_id], "reports": count}
             for topic_id, count in sorted(recent.items(), key=lambda item: (-item[1], names[item[0]]))[:MAX_LISTED]
+        ],
+        "largest": [
+            {"id": topic_id, "name": names[topic_id], "articles": count}
+            for topic_id, count in sorted(sizes.items(), key=lambda item: (-item[1], names[item[0]]))[:MAX_LISTED]
         ],
         "shared": [
             {
@@ -511,22 +529,20 @@ def render_topics(topics, query="", status="tracking", csrf_token=""):
         )
     ]
     shown.sort(key=lambda topic: _day(topic["latest_report"]) or date.min, reverse=True)
-    shown.sort(key=lambda topic: not (topic["unread"] or topic["open_questions"]))
+    shown.sort(key=lambda topic: not topic["open_questions"])
     for topic in shown:
         waiting = []
         if topic["open_questions"]:
             waiting.append(f'<span class="topic-open">{_count(topic["open_questions"], "open question")}</span>')
-        if topic["unread"]:
-            waiting.append(f'<span>{topic["unread"]} unread</span>')
         rows.append(
             render_template(
                 "topics/topic-row.html",
                 link=escape("/topic?" + urlencode({"id": topic["id"]}), quote=True),
                 id=escape(topic["id"], quote=True),
                 latest_value=escape(topic["latest_report"], quote=True),
-                waiting_count=topic["open_questions"] + topic["unread"],
+                waiting_count=topic["open_questions"],
                 topic_name=escape(topic["name"]),
-                latest=escape(short_date(topic["latest_report"])) if topic["latest_report"] else "No reports yet",
+                latest=escape(short_date(topic["latest_report"])) if topic["latest_report"] else "No articles yet",
                 size=_count(topic["articles"], "article"),
                 waiting="".join(waiting),
             )
@@ -577,12 +593,14 @@ def render_topic(data, csrf_token=""):
     rows = []
     cite = []
     for item in articles:
-        date = short_date(item["published_at"])
+        date_str = short_date(item["published_at"])
         state = "Read" if item["is_read"] else "Unread"
         rows.append(
             render_template(
                 "topics/article-row.html",
-                date=escape(date),
+                date=escape(date_str),
+                published_iso=escape(item["published_at"] or "", quote=True),
+                is_read="1" if item["is_read"] else "0",
                 link=escape(citation_href(item["url"]), quote=True),
                 title=escape(item["title"]),
                 meta=escape(" · ".join([item["publisher"], state] + (["Noted"] if item["note_excerpt"] else []))),
@@ -593,12 +611,10 @@ def render_topic(data, csrf_token=""):
         )
         cite.append(
             f'<button type="button" data-cite="{escape(citation_href(item["url"]), quote=True)}" '
-            f'data-label="{escape(item["publisher"] + ", " + date, quote=True)}">'
-            f'<span>{escape(item["title"])}</span><span class="muted">{escape(item["publisher"])} · {escape(date)}</span></button>'
+            f'data-label="{escape(item["publisher"] + ", " + date_str, quote=True)}">'
+            f'<span>{escape(item["title"])}</span><span class="muted">{escape(item["publisher"])} · {escape(date_str)}</span></button>'
         )
     summary = [_count(len(articles), "article"), _count(len({item["publisher"] for item in articles}), "publisher")]
-    if unread:
-        summary.append(f"{len(unread)} unread")
     if articles:
         summary.append(_dates(articles))
     quotes = "".join(
@@ -606,6 +622,9 @@ def render_topic(data, csrf_token=""):
         f'<a class="topic-quote-source" href="{escape(citation_href(item["url"]), quote=True)}">{escape(item["title"])}</a></blockquote>'
         for item in highlights
     )
+    queue_candidates = unread if unread else articles
+    queue_batch = min(len(queue_candidates), 10)
+    read_label = f"Queue {queue_batch} {'article' if queue_batch == 1 else 'articles'}" if queue_batch else "Queue articles"
     return render_template(
         "topics/topic.html",
         csrf_token=escape(csrf_token, quote=True),
@@ -615,9 +634,9 @@ def render_topic(data, csrf_token=""):
         summary=escape(" · ".join(summary)),
         tracking_selected="selected" if topic["status"] == "tracking" else "",
         closed_selected="selected" if topic["status"] == "closed" else "",
-        read_hidden="" if unread else "hidden",
-        read_label=f"Read {len(unread)} unread",
-        unread_urls=escape(" ".join(citation_href(item["url"]) for item in unread), quote=True),
+        read_hidden="" if queue_candidates else "hidden",
+        read_label=read_label,
+        unread_urls=escape(" ".join(citation_href(item["url"]) for item in queue_candidates), quote=True),
         article_rows="".join(rows) or '<p class="muted topic-empty">No articles yet. Add one above, or from the reader while you read.</p>',
         candidates="".join(_option(item, "data-url") for item in data["candidates"]),
         revision=topic["notes_revision"],

@@ -1,4 +1,4 @@
-// IOC panel rendering, jump-to-value highlighting, and related-report correlation UI.
+// IOC panel rendering, jump-to-value highlighting, external zero-telemetry pivots, and related-report correlation UI.
 
 const $ = (id) => document.getElementById(id);
 
@@ -13,6 +13,28 @@ export function copyText(button, text, notice) {
     .catch(() => notice("Your browser blocked copying. Select the text instead."));
 }
 
+function externalPivots(kind, value) {
+  const enc = encodeURIComponent(value);
+  if (kind === "cves") return [["NVD", `https://nvd.nist.gov/vuln/detail/${enc}`]];
+  if (kind === "techniques") {
+    if (value.startsWith("AML.")) return [["ATLAS", `https://atlas.mitre.org/techniques/${enc}`]];
+    const section = value.startsWith("TA") ? "tactics" : "techniques";
+    return [["ATT&CK", `https://attack.mitre.org/${section}/${value.replace(".", "/")}/`]];
+  }
+  if (kind === "entities") {
+    const section = value.startsWith("G") ? "groups" : "software";
+    return [["ATT&CK", `https://attack.mitre.org/${section}/${enc}/`]];
+  }
+  if (kind === "hashes") return [["VT", `https://www.virustotal.com/gui/file/${enc}`]];
+  if (kind === "domains") return [["VT", `https://www.virustotal.com/gui/domain/${enc}`]];
+  if (kind === "ips")
+    return [
+      ["VT", `https://www.virustotal.com/gui/ip-address/${enc}`],
+      ["Shodan", `https://www.shodan.io/host/${enc}`],
+    ];
+  return [];
+}
+
 // Reports often defang names as evil[.]exe, so the page text may not match the clean value.
 export function jumpToText(value, { bodyEl, setPhoneView, notice }) {
   setPhoneView("read");
@@ -21,6 +43,7 @@ export function jumpToText(value, { bodyEl, setPhoneView, notice }) {
       value.replace(/\./g, "[.]"),
       value.replace(/\./g, "(.)"),
       value.replace(/\./g, "/"),
+      value.replace(/^https?:/i, "hxxp:"),
     ].map((item) => item.toLowerCase()),
     walker = document.createTreeWalker(bodyEl, NodeFilter.SHOW_TEXT);
   let node;
@@ -68,10 +91,14 @@ export function reportLink(report, dateLabel) {
 
 export function sharedSummary(shared) {
   const parts = [
-    ...shared.hashes.map((value) => `${value.slice(0, 12)}…`),
-    ...shared.cves,
-    ...shared.files,
-    ...shared.techniques,
+    ...(shared.hashes || []).map((value) => `${value.slice(0, 12)}…`),
+    ...(shared.cves || []),
+    ...(shared.domains || []),
+    ...(shared.ips || []),
+    ...(shared.files || []),
+    ...(shared.registry || []),
+    ...(shared.entities || []),
+    ...(shared.techniques || []),
   ];
   return parts.slice(0, 4).join(", ") + (parts.length > 4 ? ` and ${parts.length - 4} more` : "");
 }
@@ -97,7 +124,10 @@ export function addAlsoInButton(row, reports, dateLabel) {
     list.hidden = !list.hidden;
     button.setAttribute("aria-expanded", String(!list.hidden));
   };
-  row.append(button, list);
+  const pivots = row.querySelector(".ioc-pivots");
+  if (pivots) row.insertBefore(button, pivots);
+  else row.append(button);
+  row.append(list);
 }
 
 export function renderRelated(data, { dateLabel }) {
@@ -116,7 +146,7 @@ export function renderRelated(data, { dateLabel }) {
   $("related-count").textContent = related.length ? `· ${related.length}` : "";
   $("related-panel").hidden = !related.length && data.complete;
   $("related-status").textContent = data.complete
-    ? "Reports in your library that share a hash, CVE, or file name with this one, or at least three ATT&CK techniques."
+    ? "Reports in your library that share a hash, CVE, domain, IP, registry key, or file name with this one, or at least three ATT&CK techniques."
     : "Still reading the rest of your library, so more may appear.";
   for (const row of document.querySelectorAll("#iocs-groups li[data-kind]")) {
     row.querySelectorAll(".ioc-also-in, .ioc-also-list").forEach((item) => item.remove());
@@ -146,11 +176,24 @@ function iocGroup(title, items, label, kind, handlers) {
     value.type = "button";
     value.className = "ioc-value";
     value.textContent = label ? `${label(item)} ${item.value}` : item.value;
+    if (item.kev) {
+      const badge = document.createElement("span");
+      badge.className = "kev-badge";
+      badge.textContent = item.ransomware ? "KEV · Ransomware" : "KEV";
+      badge.title = "Listed in CISA Known Exploited Vulnerabilities";
+      value.append(" ", badge);
+    }
     if (item.name) {
       const labelSpan = document.createElement("span");
       labelSpan.className = "ioc-name";
       labelSpan.textContent = item.retired ? `${item.name} (retired)` : item.name;
       value.append(" ", labelSpan);
+    }
+    if (item.manual) {
+      const badge = document.createElement("span");
+      badge.className = "ioc-kind-pill";
+      badge.textContent = "Manual";
+      value.append(" ", badge);
     }
     value.setAttribute(
       "aria-label",
@@ -158,9 +201,43 @@ function iocGroup(title, items, label, kind, handlers) {
     );
     value.onclick = () => jumpToText(item.value, handlers);
     row.append(value);
+    const pivots = externalPivots(kind, item.value);
+    const temporary = document.body.classList.contains("temporary-session");
+    if (pivots.length || (kind && !temporary)) {
+      const links = document.createElement("span");
+      links.className = "ioc-pivots";
+      if (kind && !temporary) {
+        const local = document.createElement("a");
+        local.className = "ioc-pivot-link";
+        local.href = "/indicators?" + new URLSearchParams({ q: item.value });
+        local.textContent = "Index";
+        local.title = `Search ${item.value} across your library`;
+        links.append(local);
+      }
+      for (const [text, href] of pivots) {
+        const ext = document.createElement("a");
+        ext.className = "ioc-pivot-link";
+        ext.href = href;
+        ext.target = "_blank";
+        ext.rel = "noopener noreferrer";
+        ext.textContent = `${text} ↗`;
+        links.append(ext);
+      }
+      if (kind && !temporary && handlers.onIgnore) {
+        const ignore = document.createElement("button");
+        ignore.type = "button";
+        ignore.className = "ioc-ignore-btn";
+        ignore.textContent = "×";
+        ignore.title = item.manual ? "Remove manual indicator" : "Ignore false positive across library";
+        ignore.setAttribute("aria-label", `${item.manual ? "Remove" : "Ignore false positive"}: ${item.value}`);
+        ignore.onclick = () => handlers.onIgnore(kind, item.value, !!item.manual);
+        links.append(ignore);
+      }
+      row.append(links);
+    }
     if (kind) {
       row.dataset.kind = kind;
-      row.dataset.key = kind === "files" ? item.value.toLowerCase() : item.value;
+      row.dataset.key = ["files", "registry"].includes(kind) ? item.value.toLowerCase() : item.value;
     }
     list.append(row);
   }
@@ -172,23 +249,52 @@ export function renderIOCs(article, handlers) {
   const iocs = article?.iocs || {},
     cves = iocs.cves || [],
     techniques = iocs.techniques || [],
+    entities = iocs.entities || [],
     hashes = iocs.hashes || [],
+    domains = iocs.domains || [],
+    ips = iocs.ips || [],
+    urls = iocs.urls || [],
     files = iocs.files || [],
+    registry = iocs.registry || [],
     samples = files.filter((item) => !item.common),
     common = files.filter((item) => item.common),
     groups = [];
   if (cves.length) groups.push(iocGroup("CVEs", cves, null, "cves", handlers));
   if (techniques.length) groups.push(iocGroup("MITRE ATT&CK", techniques, null, "techniques", handlers));
+  if (entities.length) groups.push(iocGroup("MITRE Groups & Software", entities, null, "entities", handlers));
   if (hashes.length) groups.push(iocGroup("File hashes", hashes, (item) => item.type, "hashes", handlers));
+  if (domains.length) groups.push(iocGroup("Domains", domains, null, "domains", handlers));
+  if (ips.length) groups.push(iocGroup("IP addresses", ips, null, "ips", handlers));
+  if (urls.length) groups.push(iocGroup("Defanged URLs", urls, null, null, handlers));
   if (samples.length) groups.push(iocGroup("File names", samples, null, "files", handlers));
+  if (registry.length) groups.push(iocGroup("Registry keys", registry, null, "registry", handlers));
   if (common.length) groups.push(iocGroup("Common tools and files", common, null, null, handlers));
   $("iocs-groups").replaceChildren(...groups);
-  $("iocs-panel").hidden = !groups.length;
+  const temporary = document.body.classList.contains("temporary-session");
+  $("iocs-panel").hidden = temporary && !groups.length;
   $("iocs-panel").open = false;
+  const addForm = $("ioc-add-form");
+  if (addForm) addForm.hidden = temporary || !article?.url;
   const parts = [];
-  if (cves.length) parts.push(`${cves.length} ${cves.length === 1 ? "CVE" : "CVEs"}`);
+  const kevCount = cves.filter((c) => c.kev).length;
+  if (cves.length)
+    parts.push(`${cves.length} ${cves.length === 1 ? "CVE" : "CVEs"}${kevCount ? ` (${kevCount} KEV)` : ""}`);
   if (techniques.length) parts.push(`${techniques.length} ${techniques.length === 1 ? "TTP" : "TTPs"}`);
+  if (entities.length) parts.push(`${entities.length} MITRE`);
   if (hashes.length) parts.push(`${hashes.length} ${hashes.length === 1 ? "hash" : "hashes"}`);
+  if (domains.length) parts.push(`${domains.length} ${domains.length === 1 ? "domain" : "domains"}`);
+  if (ips.length) parts.push(`${ips.length} ${ips.length === 1 ? "IP" : "IPs"}`);
   if (files.length) parts.push(`${files.length} ${files.length === 1 ? "file" : "files"}`);
+  if (registry.length) parts.push(`${registry.length} reg`);
   $("iocs-count").textContent = parts.length ? `· ${parts.join(", ")}` : "";
+  const exportBar = $("iocs-exports");
+  if (exportBar) {
+    const temp = document.body.classList.contains("temporary-session");
+    exportBar.hidden = temp || !groups.length || !article?.url;
+    if (!exportBar.hidden) {
+      for (const link of exportBar.querySelectorAll("a[data-export-fmt]")) {
+        link.href = "/export?" + new URLSearchParams({ url: article.url, format: link.dataset.exportFmt });
+      }
+    }
+  }
 }

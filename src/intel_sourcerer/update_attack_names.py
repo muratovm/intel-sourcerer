@@ -18,6 +18,7 @@ STIX_SOURCES = {
 }
 ATLAS_SOURCE = 'https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/ATLAS.yaml'
 VALID_ID = re.compile(r'^(T\d{4}(\.\d{3})?|TA\d{4}|AML\.TA?\d{4}(\.\d{3})?)$')
+VALID_ENTITY_ID = re.compile(r'^[GS]\d{4}$')
 MAX_NAME = 200
 
 
@@ -28,13 +29,19 @@ def _clean_name(value):
 
 def stix_entries(bundle):
     """Yield (id, name, retired) from an ATT&CK STIX bundle; sub-techniques get their parent's name in front."""
-    objects = [item for item in bundle.get('objects', []) if item.get('type') in {'attack-pattern', 'x-mitre-tactic'}]
     found = []
-    for item in objects:
+    for item in bundle.get('objects', []):
+        obj_type = item.get('type')
+        if obj_type in {'attack-pattern', 'x-mitre-tactic'}:
+            pattern = VALID_ID
+        elif obj_type in {'intrusion-set', 'malware', 'tool'}:
+            pattern = VALID_ENTITY_ID
+        else:
+            continue
         reference = next((ref for ref in item.get('external_references', []) if ref.get('source_name', '').startswith('mitre-') and ref.get('external_id')), None)
         identifier = reference['external_id'] if reference else ''
         name = _clean_name(item.get('name'))
-        if VALID_ID.match(identifier) and name:
+        if pattern.match(identifier) and name:
             found.append((identifier, name, bool(item.get('revoked') or item.get('x_mitre_deprecated'))))
     names = {identifier: name for identifier, name, _ in found}
     return [

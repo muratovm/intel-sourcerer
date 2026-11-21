@@ -17,7 +17,41 @@
         ${enabled_count} enabled
       </p>
       <p class="muted">Configuration: ${config_path}</p>
+      <section class="sources-check-all" aria-label="Check all sources for new articles">
+        <div class="sources-check-row">
+          <button type="button" id="check-all-sources" class="primary">Check all sources for new articles</button>
+          <label>Look back
+            <select id="check-all-days">
+              <option value="7">7 days</option>
+              <option value="30" selected>30 days</option>
+              <option value="90">90 days</option>
+            </select>
+          </label>
+        </div>
+        <p id="check-all-status" class="muted" role="status" hidden></p>
+        <ul id="check-all-results" class="sources-check-results" hidden></ul>
+      </section>
+      <section class="custom-source-box" aria-label="Add custom RSS or Atom feed">
+        <h2>Add custom RSS/Atom feed</h2>
+        <form id="custom-source-form" class="custom-source-form">
+          <label>
+            Name
+            <input id="custom-source-name" type="text" required maxlength="80" placeholder="e.g. CISA Advisories or The DFIR Report" />
+          </label>
+          <label>
+            RSS / Atom URL
+            <input id="custom-source-rss" type="url" required placeholder="https://example.com/feed.xml" />
+          </label>
+          <label>
+            Site URL (optional)
+            <input id="custom-source-site" type="url" placeholder="https://example.com/" />
+          </label>
+          <button type="submit" class="primary" id="custom-source-submit">Add feed</button>
+        </form>
+        <p id="source-feedback" class="muted" role="status" hidden></p>
+      </section>
       ${source_groups}
+      ${excluded_section}
     </main>
   </body>
 </html>

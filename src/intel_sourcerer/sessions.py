@@ -26,21 +26,42 @@ def has_notes(text, format='plain'):
     return bool((text or '').replace('\u200b','').strip())
 
 
+def _item_minutes(content_format, url, text_len, media_json):
+    from .youtube import video_duration
+
+    media = content_format in {"audio", "video"} or (url or "").startswith("https://www.youtube.com/watch?v=")
+    if media:
+        dur = video_duration(media_json)
+        if dur:
+            return max(1, round(dur / 60))
+    if text_len and text_len > 0:
+        return max(1, round(text_len / 1100))
+    return 5
+
+
 def queue_state(db):
     queue = db.execute('SELECT * FROM reading_queues ORDER BY rowid DESC LIMIT 1').fetchone()
     if not queue:
         return None
-    items = [dict(r) for r in db.execute('''SELECT a.url,a.title,a.published_at,a.is_read,a.notes,a.notes_format,s.name AS publisher
+    items = [dict(r) for r in db.execute('''SELECT a.url,a.title,a.published_at,a.is_read,a.notes,a.notes_format,
+      a.content_format,a.media_json,length(coalesce(a.content_text,'')) AS text_len,s.name AS publisher
       FROM queue_items q JOIN articles a ON a.url=q.article_url JOIN sources s ON s.id=a.source_id
       WHERE q.queue_id=? ORDER BY q.position''', (queue['id'],))]
-    for item in items:item['has_notes']=has_notes(item.pop('notes'),item.pop('notes_format'))
+    for item in items:
+        item['has_notes'] = has_notes(item.pop('notes'), item.pop('notes_format'))
+        item['minutes'] = _item_minutes(
+            item.pop('content_format'), item['url'], item.pop('text_len'), item.pop('media_json')
+        )
     return dict(id=queue['id'],cursor=queue['cursor'],finished=bool(queue['finished']),items=items,
-      read_count=sum(bool(i['is_read']) for i in items))
+      read_count=sum(bool(i['is_read']) for i in items),created_at=queue['created_at'])
+
+
+MAX_QUEUE_ITEMS = 10
 
 
 def create_queue(db, urls):
-    if not isinstance(urls, list) or not urls or len(urls)>100 or any(not isinstance(u,str) for u in urls):
-        raise SessionError('Choose between 1 and 100 articles.')
+    if not isinstance(urls, list) or not urls or len(urls) > MAX_QUEUE_ITEMS or any(not isinstance(u, str) for u in urls):
+        raise SessionError(f'Choose between 1 and {MAX_QUEUE_ITEMS} articles per reading session.')
     if len(set(urls)) != len(urls):
         raise SessionError('Articles cannot appear twice in a queue.')
     for url in urls:
@@ -49,6 +70,58 @@ def create_queue(db, urls):
     id=uuid.uuid4().hex
     db.execute('INSERT INTO reading_queues(id,created_at,cursor,finished) VALUES (?,?,0,0)',(id,datetime.now(timezone.utc).isoformat()))
     db.executemany('INSERT INTO queue_items VALUES (?,?,?)',[(id,i,url) for i,url in enumerate(urls)])
+    return queue_state(db)
+
+
+def update_queue(db, urls):
+    """Edit the single active reading queue in place (add, remove, reorder, or clear)."""
+    if not isinstance(urls, list) or any(not isinstance(u, str) for u in urls):
+        raise SessionError(f'A reading queue can hold up to {MAX_QUEUE_ITEMS} articles at a time.')
+    if len(set(urls)) != len(urls):
+        raise SessionError('Articles cannot appear twice in a queue.')
+    current = db.execute('SELECT * FROM reading_queues ORDER BY rowid DESC LIMIT 1').fetchone()
+    if not urls:
+        if current:
+            db.execute('DELETE FROM queue_items WHERE queue_id=?', (current['id'],))
+            db.execute('UPDATE reading_queues SET cursor=0, finished=1 WHERE id=?', (current['id'],))
+        return queue_state(db)
+    existing = (
+        [
+            r['article_url']
+            for r in db.execute(
+                'SELECT article_url FROM queue_items WHERE queue_id=? ORDER BY position',
+                (current['id'],),
+            )
+        ]
+        if current and not current['finished']
+        else []
+    )
+    # Allow shrinking a legacy oversized queue, but never exceed MAX_QUEUE_ITEMS when adding.
+    if len(urls) > MAX_QUEUE_ITEMS and len(urls) >= len(existing):
+        raise SessionError(f'A reading queue can hold up to {MAX_QUEUE_ITEMS} articles at a time.')
+    for url in urls:
+        if not db.execute('SELECT 1 FROM articles WHERE url=?', (url,)).fetchone():
+            raise SessionError('One of the selected articles is unavailable. Refresh and try again.')
+    if current and not current['finished']:
+        # Reading follows the list as shown: the next article is the first unread one from the top,
+        # so dragging an article to the top makes it the one you start with.
+        read = {r[0] for r in db.execute(
+            f"SELECT url FROM articles WHERE is_read=1 AND url IN ({','.join('?' * len(urls))})", urls)}
+        unread = [i for i, url in enumerate(urls) if url not in read]
+        active_url = existing[current['cursor']] if 0 <= current['cursor'] < len(existing) else None
+        if unread:
+            new_cursor = unread[0]
+        elif active_url and active_url in urls:
+            new_cursor = urls.index(active_url)
+        else:
+            new_cursor = min(max(0, current['cursor']), len(urls) - 1)
+        db.execute('DELETE FROM queue_items WHERE queue_id=?', (current['id'],))
+        db.executemany('INSERT INTO queue_items VALUES (?,?,?)', [(current['id'], i, url) for i, url in enumerate(urls)])
+        db.execute('UPDATE reading_queues SET cursor=?, finished=0 WHERE id=?', (new_cursor, current['id']))
+        return queue_state(db)
+    qid = uuid.uuid4().hex
+    db.execute('INSERT INTO reading_queues(id,created_at,cursor,finished) VALUES (?,?,0,0)', (qid, datetime.now(timezone.utc).isoformat()))
+    db.executemany('INSERT INTO queue_items VALUES (?,?,?)', [(qid, i, url) for i, url in enumerate(urls)])
     return queue_state(db)
 
 

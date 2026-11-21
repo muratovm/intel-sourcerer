@@ -133,20 +133,53 @@ async def polite_get(client: httpx.AsyncClient, url: str, *, max_bytes: int = MA
     raise AssertionError("Unreachable")
 
 
+TRACKING_PARAMS = frozenset({"fbclid", "gclid", "mc_cid", "mc_eid", "ref_src", "ref_url", "igshid"})
+
+
 def _web_url(value: str, base: str) -> str | None:
+    from urllib.parse import parse_qsl, urlencode
+
     url = urlsplit(urljoin(base, value))
     if url.scheme not in {"http", "https"} or not url.hostname:
         return None
-    return urlunsplit((url.scheme, url.netloc, url.path, url.query, ""))
+    query = url.query
+    if query:
+        cleaned = [
+            (k, v)
+            for k, v in parse_qsl(query, keep_blank_values=True)
+            if not k.lower().startswith("utm_") and k.lower() not in TRACKING_PARAMS
+        ]
+        query = urlencode(cleaned, doseq=True)
+    return urlunsplit((url.scheme, url.netloc, url.path, query, ""))
 
 
-def _date(value) -> datetime | None:
-    if value is None:
-        return None
-    try:
-        return datetime.fromtimestamp(timegm(value), timezone.utc)
-    except (ValueError, OverflowError, TypeError):
-        return None
+def _date(value, raw: str | None = None) -> datetime | None:
+    if value is not None:
+        try:
+            return datetime.fromtimestamp(timegm(value), timezone.utc)
+        except (ValueError, OverflowError, TypeError):
+            pass
+    if raw:
+        cleaned = " ".join(str(raw).split())
+        for fmt in (
+            "%b %d, %Y %H:%M:%S%z",
+            "%B %d, %Y %H:%M:%S%z",
+            "%b %d, %Y %H:%M:%S",
+            "%B %d, %Y %H:%M:%S",
+            "%b %d, %Y",
+            "%B %d, %Y",
+        ):
+            try:
+                parsed = datetime.strptime(cleaned, fmt)
+                return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+        try:
+            parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+            return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return None
 
 
 def parse_feed(data: bytes, source: FeedSource, *, base_url: str | None = None) -> tuple[list[Article], list[str]]:
@@ -172,8 +205,11 @@ def parse_feed(data: bytes, source: FeedSource, *, base_url: str | None = None) 
             title=entry.get("title", "").strip() or "Untitled",
             url=url,
             external_id=entry.get("id") or url,
-            published_at=_date(entry.get("published_parsed")),
-            updated_at=_date(entry["updated_parsed"] if "updated_parsed" in entry else None),
+            published_at=_date(entry.get("published_parsed"), entry["published"] if "published" in entry else None),
+            updated_at=_date(
+                entry["updated_parsed"] if "updated_parsed" in entry else None,
+                entry["updated"] if "updated" in entry else None,
+            ),
             author=entry.get("author"),
             summary_html=entry.get("summary", ""),
             content_html=next((c.get("value", "") for c in entry.get("content") or [] if "html" in c.get("type", "")), ""),

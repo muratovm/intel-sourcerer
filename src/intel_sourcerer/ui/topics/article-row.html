@@ -1,9 +1,12 @@
-<div class="topic-article">
+<div class="topic-article" data-read="${is_read}" data-published="${published_iso}">
   <span class="topic-article-date">${date}</span>
   <div>
     <a class="topic-article-title" href="${link}">${title}</a>
     <p class="muted">${meta}</p>
     ${note}
   </div>
-  <button type="button" class="tag-remove" data-remove="${url}" aria-label="${remove_label}">×</button>
+  <div class="topic-article-actions">
+    <button type="button" class="topic-article-queue" data-queue-url="${url}" aria-pressed="false">+ Queue</button>
+    <button type="button" class="tag-remove" data-remove="${url}" aria-label="${remove_label}">×</button>
+  </div>
 </div>

@@ -6,12 +6,12 @@ from .content import format_label, render_article_html, render_markdown
 from .iocs import extract_iocs
 
 # Raise this when extraction changes, so stored articles are read again.
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 # Extraction takes tens of milliseconds an article, so a big library catches up over several requests.
 INDEX_BUDGET_SECONDS = 4
 # Sharing one technique says little, since common ones appear in most reports.
 MIN_SHARED_TECHNIQUES = 3
-KINDS = ('hashes', 'cves', 'files', 'techniques')
+KINDS = ('hashes', 'cves', 'domains', 'ips', 'files', 'registry', 'entities', 'techniques')
 
 
 def _body_html(row):
@@ -25,8 +25,13 @@ def _body_html(row):
 def indicators_for_index(html):
     """Return (kind, value) pairs worth matching. Tools every report mentions would link everything."""
     iocs = extract_iocs(html)
-    pairs = {(kind, item['value']) for kind in ('hashes', 'cves', 'techniques') for item in iocs[kind]}
-    pairs |= {('files', item['value'].lower()) for item in iocs['files'] if not item['common']}
+    pairs = {
+        (kind, item['value'])
+        for kind in ('hashes', 'cves', 'domains', 'ips', 'entities', 'techniques')
+        for item in iocs.get(kind, [])
+    }
+    pairs |= {('files', item['value'].lower()) for item in iocs.get('files', []) if not item.get('common')}
+    pairs |= {('registry', item['value'].lower()) for item in iocs.get('registry', [])}
     return pairs
 
 
@@ -34,6 +39,10 @@ def _index_article(db, row):
     url = row['url']
     # Extract before writing, so other requests can save while this one reads.
     pairs = indicators_for_index(_body_html(row))
+    pairs |= {
+        (m['kind'], m['value'])
+        for m in db.execute('SELECT kind,value FROM manual_indicators WHERE article_url=?', (url,))
+    }
     db.execute('DELETE FROM article_indicators WHERE article_url=?', (url,))
     db.executemany('INSERT INTO article_indicators VALUES (?,?,?)', [(url, kind, value) for kind, value in pairs])
     db.execute('INSERT OR REPLACE INTO indicator_index_state VALUES (?,?)', (url, INDEX_VERSION))
@@ -79,7 +88,8 @@ def related_reports(db, url):
         JOIN article_indicators other ON other.kind=mine.kind AND other.value=mine.value AND other.article_url<>mine.article_url
         JOIN articles a ON a.url=other.article_url
         JOIN sources s ON s.id=a.source_id AND s.enabled=1
-        WHERE mine.article_url=?''',
+        WHERE mine.article_url=?
+          AND NOT EXISTS (SELECT 1 FROM ignored_indicators ig WHERE ig.kind=mine.kind AND ig.value=mine.value)''',
         (url,),
     ).fetchall()
     reports, values = {}, {}

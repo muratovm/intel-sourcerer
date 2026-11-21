@@ -31,6 +31,16 @@ def test_atom_and_missing_publication_date():
     assert articles[0].updated_at is not None
 
 
+def test_rss_parses_non_rfc2822_crowdstrike_dates():
+    cs_rss = b'''<rss version="2.0"><channel><title>Blog</title><link>https://www.crowdstrike.com/en-us/blog/</link><description></description>
+    <item><title>Java4Shell (CVE-2026-114938)</title><link>https://www.crowdstrike.com/en-us/blog/java4shell/</link>
+    <pubDate>Nov 19, 2026 00:00:00-0600</pubDate></item></channel></rss>'''
+    articles, _ = parse_feed(cs_rss, SOURCE)
+    assert len(articles) == 1
+    assert articles[0].published_at is not None
+    assert articles[0].published_at.isoformat() == "2026-11-19T06:00:00+00:00"
+
+
 def test_html_is_rejected():
     with pytest.raises(ValueError, match="not a recognized"):
         parse_feed(b"<html><body>Access denied</body></html>", SOURCE)

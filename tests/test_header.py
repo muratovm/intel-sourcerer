@@ -13,8 +13,8 @@ def header(template):
 
 PAGES = {
     'workspace/home.html': '/',
-    'workspace/queue-builder.html': '/?view=builder',
     'library/index.html': '/library',
+    'indicators/index.html': '/indicators',
     'topics/index.html': '/topics',
     'topics/topic.html': '/topics',
     'sources/index.html': '/sources',
@@ -24,7 +24,7 @@ PAGES = {
 @pytest.mark.parametrize('template,active', PAGES.items())
 def test_each_page_has_the_shared_header_with_its_link_marked(template, active):
     drawn = header(template)
-    assert re.findall(r'href="([^"]+)"', drawn) == ['/', '/?view=builder', '/topics', '/library', '/sources']
+    assert re.findall(r'href="([^"]+)"', drawn) == ['/', '/library', '/topics', '/indicators', '/sources']
     assert re.findall(r'aria-current="page" href="([^"]+)"', drawn) == [active]
     assert drawn.replace(' class="active" aria-current="page"', '') == header('auth/account-page.html')
 

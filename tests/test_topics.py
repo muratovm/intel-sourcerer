@@ -307,14 +307,15 @@ def test_overview_with_no_topics_is_empty(db):
 def test_list_sorts_waiting_first_and_searches_indicators(db):
     quiet = save(db, 'quiet', day=20, body=CVE)
     waiting = save(db, 'waiting', day=2)
-    db.execute('UPDATE articles SET is_read=1 WHERE url=?', (quiet,))
     a, b = create_topic(db, 'Quiet newest')['id'], create_topic(db, 'Waiting older')['id']
     add_article(db, quiet, a)
     add_article(db, waiting, b)
+    save_topic_notes(db, b, '<ul class="checklist"><li>Investigate</li></ul>', 0)
     topic_insights(db, a)
     rows = list_topics(db)['topics']
     page = render_topics(rows)
     assert page.index('Waiting older') < page.index('Quiet newest')
-    assert '1 unread' in page and 'Jan 20, 2026' in page
+    assert '1 open question' in page and 'Jan 20, 2026' in page
+    assert 'unread' not in page
     found = render_topics(rows, 'cve-2026-1234')
     assert 'Quiet newest' in found and 'Waiting older' not in found

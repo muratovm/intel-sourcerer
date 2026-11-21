@@ -106,10 +106,16 @@ def read_state_articles(database):
             WHERE s.enabled=1 ORDER BY a.published_at DESC,a.title""").fetchall()
 
 
-def render_sources(config, csrf_token=""):
-    from .source_view import render_sources_list
+def render_sources(config, csrf_token="", database=None):
+    from .source_view import recent_excluded, render_sources_list, source_health
 
-    return render_sources_list(load_sources(config), csrf_token, str(config))
+    health = None
+    excluded = None
+    if database is not None:
+        with closing(connect_database(database)) as db:
+            health = source_health(db)
+            excluded = recent_excluded(db)
+    return render_sources_list(load_sources(config), csrf_token, str(config), health=health, excluded=excluded)
 
 
 def create_server(
@@ -300,24 +306,89 @@ def create_server(
             ensure_schema(session["database_path"])
             return session["database_path"], session["config_path"], session["csrf"]
 
-        def account_page(self, error="", status=200):
+        def account_page(self, error="", status=200, message="", ai_form=None):
             if api_only and self.headers.get("Accept") == "application/json":
-                self.respond({"message": error, "page": "account"}, status=status)
+                self.respond({"message": error or message, "page": "account"}, status=status)
                 return
             csrf = escape(self.session["csrf"])
             content = render_template("auth/password.html", csrf=csrf)
             signout = render_template("auth/signout.html", username=escape(self.session["username"]), csrf=csrf)
+            from .ai_assist import ai_status
+            from .backups import backup_summary
+            from .http_common import display_timezone
+            from .library import format_size, storage_breakdown
+            from .sessions import has_notes
             from .stats import render_stats_section, stats_data
 
-            with closing(session_db(self.session["database_path"])) as db:
+            db_path = self.session["database_path"]
+            usage = storage_breakdown(db_path)
+            binfo = backup_summary(db_path)
+            ai = ai_status()
+            tz_name = display_timezone().key
+            active_sessions = accounts.active_sessions_count(self.session["user_id"])
+            from .reading_history import history_counts, render_history_panel
+
+            with closing(session_db(db_path)) as db:
                 stats = render_stats_section(stats_data(db))
+                history_panel = render_history_panel(history_counts(db), csrf)
+                articles_count = db.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+                topics_count = db.execute("SELECT COUNT(*) FROM topics").fetchone()[0]
+                noted_count = sum(
+                    1
+                    for r in db.execute("SELECT notes, notes_format FROM articles WHERE trim(notes)<>''")
+                    if has_notes(r["notes"], r["notes_format"])
+                )
+            from .ai_assist import render_settings_panel
+
+            ai_form = ai_form or {}
+            ai_panel = render_settings_panel(
+                csrf, models=ai_form.get("models"), notice=ai_form.get("notice", ""),
+                is_admin=self.is_admin, draft=ai_form.get("draft"),
+            )
+            other_sessions = max(0, active_sessions - 1)
+            sessions_label = (
+                f"{active_sessions} active session"
+                if active_sessions == 1
+                else f"{active_sessions} active sessions"
+            )
+            backups_label = (
+                f"{binfo['count']} {'snapshot' if binfo['count'] == 1 else 'snapshots'} ({format_size(binfo['total_bytes'])})"
+                if binfo["count"]
+                else "No snapshots yet"
+            )
+            latest_backup = binfo["latest"] or "Never"
+            ai_badge_class = "is-on" if ai["enabled"] else "is-off"
+            ai_badge = "Active" if ai["enabled"] else "Off"
+            ai_detail = (
+                f"{ai['provider']} · {ai['model']}"
+                if ai["enabled"]
+                else "Set INTEL_AI_URL (Ollama) or OPENAI_API_KEY / ANTHROPIC_API_KEY"
+            )
             self.respond(
                 render_template(
                     "auth/account-page.html",
+                    csrf=csrf,
                     error=escape(error),
+                    message=escape(message),
+                    message_hidden="" if message else "hidden",
                     content=content,
                     stats=stats,
                     signout=signout,
+                    db_size=escape(format_size(usage["db_bytes"])),
+                    media_size=escape(format_size(usage["media_bytes"])),
+                    backups_label=escape(backups_label),
+                    latest_backup=escape(latest_backup),
+                    timezone_label=escape(tz_name),
+                    articles_count=str(articles_count),
+                    topics_count=str(topics_count),
+                    noted_count=str(noted_count),
+                    ai_badge_class=ai_badge_class,
+                    ai_badge=escape(ai_badge),
+                    ai_detail=escape(ai_detail),
+                    sessions_label=escape(sessions_label),
+                    logout_others_disabled="" if other_sessions else "disabled",
+                    history_panel=history_panel,
+                    ai_panel=ai_panel,
                 ),
                 "text/html; charset=utf-8",
                 status,
@@ -362,9 +433,37 @@ def create_server(
                         accounts.clear_setup_attempts(client_ip)
                 elif path == "/auth/login":
                     user_id = accounts.login(username, password, client_ip)
-                elif path in {"/auth/logout", "/auth/create-user", "/auth/password", "/auth/delete-account"}:
+                elif path in {"/auth/logout", "/auth/logout-others", "/auth/backup", "/auth/wipe-history", "/auth/ai-settings", "/auth/create-user", "/auth/password", "/auth/delete-account"}:
                     context = self.context()
                     if not context:
+                        return
+                    if path == "/auth/backup":
+                        backup_database(self.session["database_path"], overwrite=True)
+                        self.account_page(message="Backup snapshot saved.")
+                        return
+                    if path == "/auth/ai-settings":
+                        if not self.is_admin:
+                            raise ValueError("Only an administrator can change AI assist settings.")
+                        from .ai_assist import handle_settings_form
+
+                        self.account_page(ai_form=handle_settings_form(data))
+                        return
+                    if path == "/auth/wipe-history":
+                        if data.get("confirm", [""])[0] != "wipe":
+                            raise ValueError("Tick the box to confirm before wiping your reading history.")
+                        from .reading_history import wipe_reading_history
+
+                        result = wipe_reading_history(self.session["database_path"])
+                        self.account_page(message=f"Reading history wiped. A backup was saved as {result['backup']}.")
+                        return
+                    if path == "/auth/logout-others":
+                        revoked = accounts.revoke_other_sessions(session)
+                        msg = (
+                            f"Signed out {revoked} other {'device' if revoked == 1 else 'devices'}."
+                            if revoked
+                            else "No other active sessions to sign out."
+                        )
+                        self.account_page(message=msg)
                         return
                     if path == "/auth/password":
                         accounts.change_password(
@@ -445,6 +544,34 @@ def create_server(
             self.end_headers()
             self.wfile.write(body)
 
+        def respond_static(self, file_path, content_type):
+            stat = file_path.stat()
+            etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                send_security_headers(
+                    self,
+                    csp=build_csp(include_pwa=True),
+                    over_https=self.over_https(),
+                    cache_control="public, max-age=0, must-revalidate",
+                )
+                self.end_headers()
+                return
+            body = file_path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("ETag", etag)
+            send_security_headers(
+                self,
+                csp=build_csp(include_pwa=True),
+                over_https=self.over_https(),
+                cache_control="public, max-age=0, must-revalidate",
+            )
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):
             path = urlsplit(self.path).path
             if not api_only:
@@ -464,7 +591,7 @@ def create_server(
                 return
             if not api_only and path in STATIC_FILES:
                 name, content_type = STATIC_FILES[path]
-                self.respond((UI_ROOT / name).read_bytes(), content_type)
+                self.respond_static(UI_ROOT / name, content_type)
                 return
             if not api_only and path == "/save":
                 # Public: a link from another site arrives without the Strict session cookie.
@@ -504,8 +631,36 @@ def create_server(
             if accounts and path == "/account":
                 self.account_page()
                 return
-            if path in {"/library", "/export"}:
-                from .library import render_library, export_article, storage_usage
+            if path == "/account/backup":
+                from datetime import datetime, timezone
+                from .backups import snapshot_bytes
+
+                stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                self.respond(
+                    snapshot_bytes(database),
+                    "application/x-sqlite3",
+                    200,
+                    {"Content-Disposition": f'attachment; filename="intel-sourcerer-{stamp}.sqlite3"'},
+                )
+                return
+            if path == "/account/export-notes":
+                from datetime import datetime, timezone
+                from .backups import export_notes_zip
+
+                stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                with closing(session_db(database)) as db:
+                    archive = export_notes_zip(db)
+                self.respond(
+                    archive,
+                    "application/zip",
+                    200,
+                    {"Content-Disposition": f'attachment; filename="intel-sourcerer-notes-{stamp}.zip"'},
+                )
+                return
+            if path in {"/library", "/export", "/export-topic", "/indicators"}:
+                from .cti_export import export_article_format, export_topic_format
+                from .indicators import indicators_data, render_indicators_page
+                from .library import render_library, storage_usage
 
                 params = parse_qs(urlsplit(self.path).query)
                 with closing(session_db(database)) as db:
@@ -522,20 +677,64 @@ def create_server(
                                 params.get("type", [""])[0],
                                 params.get("progress", [""])[0] == "1",
                                 page=params.get("page", ["1"])[0],
+                                unread_only=params.get("unread", [""])[0] == "1",
+                                source=params.get("source", [""])[0],
+                                topic=params.get("topic", [""])[0],
+                                days=params.get("days", [""])[0],
                             ),
                             "text/html; charset=utf-8",
                         )
-                    else:
-                        result = export_article(db, params.get("url", [""])[0])
+                    elif path == "/indicators":
+                        from .indicators import indicator_options
+
+                        options = indicator_options(params)
                         self.respond(
-                            result or "Article not found",
-                            "text/markdown; charset=utf-8",
-                            200 if result else 404,
+                            render_indicators_page(
+                                indicators_data(db, **options),
+                                options=options,
+                                csrf_token=csrf_token,
+                            ),
+                            "text/html; charset=utf-8",
                         )
+                    elif path == "/export-topic":
+                        fmt = params.get("format", ["markdown"])[0]
+                        try:
+                            exported = export_topic_format(db, params.get("id", [""])[0], fmt)
+                        except ValueError as exc:
+                            self.respond({"error": str(exc)}, status=400)
+                            return
+                        if exported is None:
+                            self.respond("Topic not found", "text/plain; charset=utf-8", 404)
+                        else:
+                            body, ctype, ext, name = exported
+                            safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in name.lower()).strip("-") or "topic"
+                            self.respond(
+                                body,
+                                ctype,
+                                200,
+                                {"Content-Disposition": f'attachment; filename="{safe[:60]}.{ext}"'},
+                            )
+                    else:
+                        fmt = params.get("format", ["markdown"])[0]
+                        try:
+                            exported = export_article_format(db, params.get("url", [""])[0], fmt)
+                        except ValueError as exc:
+                            self.respond({"error": str(exc)}, status=400)
+                            return
+                        if exported is None:
+                            self.respond("Article not found", "text/markdown; charset=utf-8", 404)
+                        else:
+                            body, ctype, ext = exported
+                            headers = (
+                                {"Content-Disposition": f'attachment; filename="article.{ext}"'}
+                                if fmt != "markdown"
+                                else None
+                            )
+                            self.respond(body, ctype, 200, headers)
                 return
             if path in SHARED_STATIC_FILES:
                 name, content_type = SHARED_STATIC_FILES[path]
-                self.respond((UI_ROOT / name).read_bytes(), content_type)
+                self.respond_static(UI_ROOT / name, content_type)
                 return
             if path.startswith("/vendor/katex/"):
                 self.respond({"error": "Not found"}, status=404)
@@ -641,7 +840,8 @@ def create_server(
             if path == "/sources":
                 try:
                     self.respond(
-                        render_sources(config, csrf_token), "text/html; charset=utf-8"
+                        render_sources(config, csrf_token, database=database),
+                        "text/html; charset=utf-8",
                     )
                 except ValueError as exc:
                     self.respond({"error": str(exc)}, status=500)
@@ -826,6 +1026,68 @@ def create_server(
                         return
                     if not isinstance(data, dict):
                         raise ValueError("Invalid request")
+                    if path == "/api/source-add":
+                        from .config import add_custom_source
+                        from .storage import save_source
+
+                        with user_lock:
+                            added = add_custom_source(
+                                config,
+                                data.get("name", ""),
+                                data.get("rss_url", ""),
+                                data.get("parent_url"),
+                                data.get("notes", ""),
+                            )
+                            with closing(connect_database(database)) as source_db, source_db:
+                                save_source(source_db, added)
+                        self.respond({"id": added.id, "name": added.name}, status=201)
+                        return
+                    if path == "/api/source-delete":
+                        from .config import remove_custom_source
+
+                        source_id = data.get("id", "")
+                        with user_lock:
+                            remove_custom_source(config, source_id)
+                            with closing(connect_database(database)) as source_db, source_db:
+                                source_db.execute("UPDATE sources SET enabled=0 WHERE id=?", (source_id,))
+                        self.respond({"deleted": source_id})
+                        return
+                    if path == "/api/source-relevance":
+                        from .config import set_source_relevance
+
+                        with user_lock:
+                            set_source_relevance(config, data.get("id", ""), data.get("relevance", ""))
+                        self.respond({"id": data.get("id"), "relevance": data.get("relevance")})
+                        return
+                    if path == "/api/jobs/check-source":
+                        source_id = data.get("id", "")
+                        days = data.get("days", 30)
+                        if not isinstance(source_id, str) or not source_id:
+                            raise ValueError("Choose a source to check.")
+                        if type(days) is not int or days not in VALID_DISCOVERY_DAYS:
+                            raise ValueError("Choose a valid time window.")
+
+                        def run_single_source():
+                            now = datetime.now(timezone.utc)
+                            since = (
+                                datetime(1970, 1, 1, tzinfo=timezone.utc)
+                                if days == 0
+                                else now - timedelta(days=days)
+                            )
+                            return asyncio.run(
+                                import_articles(config, database, since, now, source_id=source_id)
+                            )
+
+                        job = start_job(database, "check-source", user_lock, run_single_source)
+                        self.respond(job, status=202)
+                        return
+                    if path == "/api/ai-assist":
+                        from .ai_assist import run_ai_assist
+
+                        with closing(session_db(database)) as ai_db:
+                            result = run_ai_assist(ai_db, data.get("url", ""), data.get("mode", ""), data.get("question", ""))
+                        self.respond(result)
+                        return
                     if path == "/api/transcribe":
                         from . import transcripts
 
@@ -1005,7 +1267,53 @@ def create_server(
             self.send_header("Content-Length", "0")
             self.end_headers()
 
-    return BoundedHTTPServer((host, port), Handler)
+    server = BoundedHTTPServer((host, port), Handler)
+    raw_hours = os.environ.get("INTEL_AUTO_REFRESH_HOURS", "").strip()
+    if raw_hours:
+        try:
+            hours = float(raw_hours)
+        except ValueError:
+            hours = 0.0
+        if hours > 0:
+            interval = max(1800.0, hours * 3600.0)
+            stop_refresh = threading.Event()
+
+            def _refresh_loop():
+                while not stop_refresh.wait(interval):
+                    targets = []
+                    if accounts:
+                        try:
+                            with accounts.transaction() as adb:
+                                targets = [
+                                    (row["database_path"], row["config_path"])
+                                    for row in adb.execute("SELECT database_path, config_path FROM users")
+                                ]
+                        except sqlite3.Error:
+                            targets = []
+                    else:
+                        targets = [(base_database, base_config)]
+                    now = datetime.now(timezone.utc)
+                    since = now - timedelta(days=30)
+                    for target_db, target_cfg in targets:
+                        lock = discovery_lock_for(target_db)
+                        if not lock.acquire(blocking=False):
+                            continue
+                        try:
+                            asyncio.run(import_articles(target_cfg, target_db, since, now))
+                        except Exception:
+                            pass
+                        finally:
+                            lock.release()
+
+            threading.Thread(target=_refresh_loop, name="auto-refresh", daemon=True).start()
+            original_close = server.server_close
+
+            def _close_with_refresh():
+                stop_refresh.set()
+                original_close()
+
+            server.server_close = _close_with_refresh
+    return server
 
 
 def main():

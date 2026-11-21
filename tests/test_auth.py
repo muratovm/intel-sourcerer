@@ -151,3 +151,58 @@ def test_delete_account_over_http(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_active_sessions_and_revoke_other_sessions(tmp_path):
+    accounts = make_accounts(tmp_path)
+    owner = accounts.create_user('owner', 'very-long-password', first=True)
+    tok1, _ = accounts.new_session(owner)
+    tok2, _ = accounts.new_session(owner)
+    tok3, _ = accounts.new_session(owner)
+    assert accounts.active_sessions_count(owner) == 3
+    s1 = accounts.session('intel_session=' + tok1)
+    assert accounts.revoke_other_sessions(s1) == 2
+    assert accounts.active_sessions_count(owner) == 1
+    assert accounts.session('intel_session=' + tok1) is not None
+    assert accounts.session('intel_session=' + tok2) is None
+    assert accounts.session('intel_session=' + tok3) is None
+
+
+def test_backup_snapshot_summary_and_export_notes_zip(tmp_path):
+    import io
+    import sqlite3
+    import zipfile
+    from intel_sourcerer.backups import backup_database, backup_summary, export_notes_zip, snapshot_bytes
+    from intel_sourcerer.topics import add_article, create_topic, save_topic_notes
+
+    db_path = tmp_path / 'articles.sqlite3'
+    db = connect_database(db_path)
+    db.execute("INSERT INTO sources VALUES ('s1','Vendor','rss','https://example.com',1)")
+    db.execute(
+        """INSERT INTO articles (url,source_id,title,published_at,summary_html,content_status,relevance_reason,discovered_at,content_text,notes,notes_format)
+        VALUES ('https://example.com/a','s1','Alpha Report','2026-01-01','','full_text','','2026-01-01','Body','<p>My note</p>','html')"""
+    )
+    tid = create_topic(db, 'APT29')['id']
+    add_article(db, 'https://example.com/a', tid)
+    save_topic_notes(db, tid, '<p>Topic summary</p>', 0)
+    db.commit()
+
+    backup_database(db_path, overwrite=True)
+    summary = backup_summary(db_path)
+    assert summary['count'] == 1 and summary['latest'] and summary['total_bytes'] > 0
+
+    raw = snapshot_bytes(db_path)
+    copy_path = tmp_path / 'restored.sqlite3'
+    copy_path.write_bytes(raw)
+    with closing(sqlite3.connect(copy_path)) as restored:
+        assert restored.execute('SELECT COUNT(*) FROM articles').fetchone()[0] == 1
+
+    archive = export_notes_zip(db)
+    db.close()
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        names = zf.namelist()
+        assert 'README.txt' in names
+        assert 'articles/alpha-report.md' in names
+        assert 'topics/apt29.md' in names
+        assert 'My note' in zf.read('articles/alpha-report.md').decode()
+        assert 'Topic summary' in zf.read('topics/apt29.md').decode()

@@ -20,7 +20,16 @@ from .config import load_sources
 from .feeds import Article, FeedCache, Refused, fetch_feed, polite_get
 from .storage import connect_database, save_article, save_source
 
-TERMS = re.compile(r"cyber|distillation|malicious|misuse|espionage|phishing|ransomware|vulnerabilit|prompt injection|hacking|frontier safeguards", re.I)
+TERMS = re.compile(
+    r"cyber|distillation|malicious|misuse|espionage|phishing|ransomware|vulnerabilit|prompt injection|hacking|frontier safeguards|"
+    r"cve-\d{4}-|exploit|malware|backdoor|intrusion|zero-day|adversar|supply chain|threat actor|botnet|rootkit|infostealer|post-exploitation",
+    re.I,
+)
+# Exclude broad launch/event/PR posts whose security mention is incidental.
+EXCLUDED_TITLES = re.compile(
+    r"^(Introducing |GPT-\d.*: A new generation)|DevDay.*Recap|named a leader|gartner|forrester|appoints .* as|now available in aws",
+    re.I,
+)
 # Everything these teams publish is in scope, so no keyword has to match.
 ALWAYS_RELEVANT_SOURCES = {'anthropic-frontier-red-team'}
 
@@ -55,14 +64,18 @@ def in_window(article, since, until):
 
 
 def selection_reason(article, source):
+    if source.relevance == 'all':
+        return f'All posts kept for {source.name}'
+    if source.source_type == 'custom':
+        return f'Custom feed: {source.name}'
     if source.id in ALWAYS_RELEVANT_SOURCES:
         return f'Published by {source.name}, a dedicated security research team'
     return relevance_reason(article)
 
 
 def relevance_reason(article):
-    # Exclude broad launch/event posts whose security mention is incidental.
-    if re.search(r"^(Introducing |GPT-\d.*: A new generation)|DevDay.*Recap", article.title, re.I):
+    # Exclude broad launch/event/PR posts whose security mention is incidental.
+    if EXCLUDED_TITLES.search(article.title):
         return None
     text = article.title + ' ' + BeautifulSoup(article.summary_html, 'html.parser').get_text(' ', strip=True)
     match = TERMS.search(text)
@@ -152,10 +165,16 @@ def feed_text(article):
     return text, markdown, media, clean_html
 
 
-async def import_articles(config, database, since, until):
+async def import_articles(config, database, since, until, *, source_id=None):
     if since >= until:
         raise ValueError('since must precede until')
-    sources = [s for s in load_sources(config) if s.enabled]
+    all_sources = load_sources(config)
+    if source_id is not None:
+        sources = [s for s in all_sources if s.id == source_id]
+        if not sources:
+            raise ValueError('Unknown source.')
+    else:
+        sources = [s for s in all_sources if s.enabled]
     report = {'since':since.isoformat(), 'until':until.isoformat(), 'sources':[], 'errors':[], 'paused':[]}
     db = connect_database(database)
     started = datetime.now(timezone.utc).isoformat()
@@ -210,7 +229,7 @@ async def import_articles(config, database, since, until):
                     stats['in_window']+=1
                     reason = selection_reason(article, source)
                     if reason: selected.append((article,reason))
-                    else:stats['excluded'].append(article.title)
+                    else:stats['excluded'].append({'title': article.title, 'url': article.url})
                 # Text already saved isn't fetched again. Failed ones stay out of this set, so they get another try.
                 saved={row[0] for row in db.execute("SELECT url FROM articles WHERE source_id=? AND content_status='full_text' AND content_html IS NOT NULL",(source.id,))}
                 gate=asyncio.Semaphore(4)

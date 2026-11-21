@@ -157,13 +157,66 @@ def connect_database(path):
         DELETE FROM indicator_index_state WHERE article_url=OLD.url;
       END;
     """)
+    db.executescript("""CREATE TABLE IF NOT EXISTS watchlists (
+      id TEXT PRIMARY KEY,
+      term TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ignored_indicators (
+      kind TEXT NOT NULL,
+      value TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY(kind, value)
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS manual_indicators (
+      article_url TEXT NOT NULL REFERENCES articles(url) DEFERRABLE INITIALLY DEFERRED,
+      kind TEXT NOT NULL,
+      value TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY(article_url, kind, value)
+    ) WITHOUT ROWID;
+    CREATE TRIGGER IF NOT EXISTS manual_indicators_removed AFTER DELETE ON articles
+      BEGIN DELETE FROM manual_indicators WHERE article_url=OLD.url; END;""")
+    _migrate_tags_to_topics(db)
     _ensure_fts_index(db)
     db.commit()
     return db
 
 
+def _migrate_tags_to_topics(db):
+    """Merge legacy article_tags into topics + topic_articles so Topics are the single organizational model."""
+    rows = db.execute(
+        "SELECT article_url, tag, created_at FROM article_tags ORDER BY created_at, article_url"
+    ).fetchall()
+    if not rows:
+        return
+    import uuid
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    for row in rows:
+        tag_name = " ".join((row["tag"] or "").split()).strip().lstrip("#").strip()
+        if not tag_name:
+            continue
+        existing = db.execute("SELECT id FROM topics WHERE name=?", (tag_name,)).fetchone()
+        if existing:
+            topic_id = existing[0]
+        else:
+            topic_id = uuid.uuid4().hex
+            created = row["created_at"] or now
+            db.execute(
+                "INSERT INTO topics(id,name,created_at,updated_at) VALUES (?,?,?,?)",
+                (topic_id, tag_name, created, created),
+            )
+        db.execute(
+            "INSERT OR IGNORE INTO topic_articles(topic_id,article_url,added_at) VALUES (?,?,?)",
+            (topic_id, row["article_url"], row["created_at"] or now),
+        )
+    db.execute("DELETE FROM article_tags")
+
+
 def _ensure_fts_index(db):
-    """Create and synchronize an FTS5 trigram index for fast substring search across articles, notes, highlights, and tags."""
+    """Create and synchronize an FTS5 trigram index for fast substring search across articles, notes, highlights, and topics."""
     try:
         db.executescript("""
         CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
@@ -176,61 +229,87 @@ def _ensure_fts_index(db):
           tags,
           tokenize='trigram'
         );
+        DROP TRIGGER IF EXISTS articles_fts_au;
+        DROP TRIGGER IF EXISTS articles_fts_tag_ai;
+        DROP TRIGGER IF EXISTS articles_fts_tag_ad;
+        DROP TRIGGER IF EXISTS articles_fts_hl_ai;
+        DROP TRIGGER IF EXISTS articles_fts_hl_ad;
+        DROP TRIGGER IF EXISTS articles_fts_topic_ai;
+        DROP TRIGGER IF EXISTS articles_fts_topic_ad;
+        DROP TRIGGER IF EXISTS articles_fts_topic_rename;
         CREATE TRIGGER IF NOT EXISTS articles_fts_ai AFTER INSERT ON articles BEGIN
           INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
           SELECT NEW.url, NEW.title, coalesce((SELECT name FROM sources WHERE id=NEW.source_id), ''),
                  coalesce(NEW.content_text, ''), coalesce(NEW.notes, ''), '', '';
         END;
-        CREATE TRIGGER IF NOT EXISTS articles_fts_au AFTER UPDATE OF title,content_text,notes,source_id ON articles BEGIN
+        CREATE TRIGGER articles_fts_au AFTER UPDATE OF title,content_text,notes,source_id ON articles BEGIN
           DELETE FROM articles_fts WHERE url=OLD.url;
           INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
           SELECT NEW.url, NEW.title, coalesce((SELECT name FROM sources WHERE id=NEW.source_id), ''),
                  coalesce(NEW.content_text, ''), coalesce(NEW.notes, ''),
                  coalesce((SELECT group_concat(quote, ' ') FROM article_highlights WHERE article_url=NEW.url), ''),
-                 coalesce((SELECT group_concat(tag, ' ') FROM article_tags WHERE article_url=NEW.url), '');
+                 coalesce((SELECT group_concat(tp.name, ' ') FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=NEW.url), '');
         END;
         CREATE TRIGGER IF NOT EXISTS articles_fts_ad AFTER DELETE ON articles BEGIN
           DELETE FROM articles_fts WHERE url=OLD.url;
         END;
-        CREATE TRIGGER IF NOT EXISTS articles_fts_tag_ai AFTER INSERT ON article_tags BEGIN
+        CREATE TRIGGER articles_fts_topic_ai AFTER INSERT ON topic_articles BEGIN
           DELETE FROM articles_fts WHERE url=NEW.article_url;
           INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
           SELECT a.url, a.title, coalesce(s.name, ''), coalesce(a.content_text, ''), coalesce(a.notes, ''),
                  coalesce((SELECT group_concat(quote, ' ') FROM article_highlights WHERE article_url=a.url), ''),
-                 coalesce((SELECT group_concat(tag, ' ') FROM article_tags WHERE article_url=a.url), '')
+                 coalesce((SELECT group_concat(tp.name, ' ') FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=a.url), '')
           FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.url=NEW.article_url;
         END;
-        CREATE TRIGGER IF NOT EXISTS articles_fts_tag_ad AFTER DELETE ON article_tags BEGIN
+        CREATE TRIGGER articles_fts_topic_ad AFTER DELETE ON topic_articles BEGIN
           DELETE FROM articles_fts WHERE url=OLD.article_url;
           INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
           SELECT a.url, a.title, coalesce(s.name, ''), coalesce(a.content_text, ''), coalesce(a.notes, ''),
                  coalesce((SELECT group_concat(quote, ' ') FROM article_highlights WHERE article_url=a.url), ''),
-                 coalesce((SELECT group_concat(tag, ' ') FROM article_tags WHERE article_url=a.url), '')
+                 coalesce((SELECT group_concat(tp.name, ' ') FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=a.url), '')
           FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.url=OLD.article_url;
         END;
-        CREATE TRIGGER IF NOT EXISTS articles_fts_hl_ai AFTER INSERT ON article_highlights BEGIN
+        CREATE TRIGGER articles_fts_topic_rename AFTER UPDATE OF name ON topics BEGIN
+          DELETE FROM articles_fts WHERE url IN (SELECT article_url FROM topic_articles WHERE topic_id=NEW.id);
+          INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
+          SELECT a.url, a.title, coalesce(s.name, ''), coalesce(a.content_text, ''), coalesce(a.notes, ''),
+                 coalesce((SELECT group_concat(quote, ' ') FROM article_highlights WHERE article_url=a.url), ''),
+                 coalesce((SELECT group_concat(tp.name, ' ') FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=a.url), '')
+          FROM articles a LEFT JOIN sources s ON s.id=a.source_id
+          WHERE a.url IN (SELECT article_url FROM topic_articles WHERE topic_id=NEW.id);
+        END;
+        CREATE TRIGGER articles_fts_hl_ai AFTER INSERT ON article_highlights BEGIN
           DELETE FROM articles_fts WHERE url=NEW.article_url;
           INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
           SELECT a.url, a.title, coalesce(s.name, ''), coalesce(a.content_text, ''), coalesce(a.notes, ''),
                  coalesce((SELECT group_concat(quote, ' ') FROM article_highlights WHERE article_url=a.url), ''),
-                 coalesce((SELECT group_concat(tag, ' ') FROM article_tags WHERE article_url=a.url), '')
+                 coalesce((SELECT group_concat(tp.name, ' ') FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=a.url), '')
           FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.url=NEW.article_url;
         END;
-        CREATE TRIGGER IF NOT EXISTS articles_fts_hl_ad AFTER DELETE ON article_highlights BEGIN
+        CREATE TRIGGER articles_fts_hl_ad AFTER DELETE ON article_highlights BEGIN
           DELETE FROM articles_fts WHERE url=OLD.article_url;
           INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
           SELECT a.url, a.title, coalesce(s.name, ''), coalesce(a.content_text, ''), coalesce(a.notes, ''),
                  coalesce((SELECT group_concat(quote, ' ') FROM article_highlights WHERE article_url=a.url), ''),
-                 coalesce((SELECT group_concat(tag, ' ') FROM article_tags WHERE article_url=a.url), '')
+                 coalesce((SELECT group_concat(tp.name, ' ') FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=a.url), '')
           FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.url=OLD.article_url;
         END;
         """)
-        # Backfill any existing articles created before FTS5 was enabled.
+        # Backfill any existing articles created before FTS5 was enabled, and refresh topic names in FTS.
+        db.execute("""
+        DELETE FROM articles_fts
+        WHERE url IN (
+          SELECT ta.article_url FROM topic_articles ta
+          JOIN topics tp ON tp.id=ta.topic_id
+          LEFT JOIN articles_fts f ON f.url=ta.article_url
+          WHERE f.url IS NULL OR instr(coalesce(f.tags, ''), tp.name)=0
+        )
+        """)
         db.execute("""
         INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
         SELECT a.url, a.title, coalesce(s.name, ''), coalesce(a.content_text, ''), coalesce(a.notes, ''),
                coalesce((SELECT group_concat(h.quote, ' ') FROM article_highlights h WHERE h.article_url=a.url), ''),
-               coalesce((SELECT group_concat(t.tag, ' ') FROM article_tags t WHERE t.article_url=a.url), '')
+               coalesce((SELECT group_concat(tp.name, ' ') FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=a.url), '')
         FROM articles a LEFT JOIN sources s ON s.id=a.source_id
         WHERE a.url NOT IN (SELECT url FROM articles_fts)
         """)

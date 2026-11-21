@@ -1,11 +1,18 @@
-<a
-  class="lib-item ${selected_class}"
-  href="${selection_url}"
-  ${current_attribute}
-  ><span class="format-chip format-${format_class}">${format_label}</span>
-  <h2>${title}</h2>
-  <span class="lib-meta"
-    ><span class="lib-publisher">${publisher}</span
-    ><span>${published_date}</span>${badges}${tags}</span
-  ></a
->
+<div class="lib-item-row ${selected_class}" data-url="${url}" data-title="${title}" data-publisher="${publisher}" data-minutes="${minutes}">
+  <a
+    class="lib-item ${selected_class}"
+    href="${selection_url}"
+    ${current_attribute}
+    ><span class="format-chip format-${format_class}">${format_label}</span>
+    <h2>${title}</h2>
+    <span class="lib-meta"
+      ><span class="lib-publisher">${publisher}</span
+      ><span>${published_date}</span>${badges}${tags}</span
+    ></a
+  ><button
+    type="button"
+    class="lib-queue-btn"
+    data-queue-url="${url}"
+    aria-pressed="false"
+  >+ Queue</button>
+</div>

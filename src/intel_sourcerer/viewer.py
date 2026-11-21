@@ -191,13 +191,32 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
             data = self.model("/api/stats")
             if data is None:
                 return
+            # The viewer has no direct database access, so panels that need it show neutral values here.
             self.reply(
                 render_template(
                     "auth/account-page.html",
+                    csrf=csrf,
                     error=escape(message),
+                    message="",
+                    message_hidden="hidden",
                     content=content,
                     stats=render_stats_section(data),
                     signout=signout,
+                    db_size="—",
+                    media_size="—",
+                    backups_label="Managed by the backend",
+                    latest_backup="—",
+                    timezone_label="—",
+                    articles_count="—",
+                    topics_count="—",
+                    noted_count="—",
+                    ai_badge_class="is-off",
+                    ai_badge="Off",
+                    ai_detail="Configure AI assist on the backend",
+                    ai_panel="",
+                    history_panel="",
+                    sessions_label="Signed in",
+                    logout_others_disabled="disabled",
                 ),
                 status,
             )
@@ -258,7 +277,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                 return
             if (
                 path.startswith(("/api/", "/pdf-assets/", "/local-media/"))
-                or path == "/export"
+                or path in {"/export", "/export-topic"}
             ):
                 self.proxy("GET")
                 return
@@ -268,6 +287,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                 "/setup",
                 "/account",
                 "/library",
+                "/indicators",
                 "/topics",
                 "/topic",
                 "/sources",
@@ -324,7 +344,21 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                     params.get("progress", [""])[0] == "1",
                     page=params.get("page", ["1"])[0],
                     fts_urls=fts_urls,
+                    unread_only=params.get("unread", [""])[0] == "1",
+                    source=params.get("source", [""])[0],
+                    topic=params.get("topic", [""])[0],
+                    days=params.get("days", [""])[0],
                 )
+            elif path == "/indicators":
+                from .indicators import indicator_options, render_indicators_page
+
+                options = indicator_options(params)
+                query_args = {k: params[k][0] for k in ("q", "kind", "kev", "days", "sort", "limit") if params.get(k, [""])[0]}
+                api_path = "/api/indicators" + ("?" + urlencode(query_args) if query_args else "")
+                data = self.model(api_path)
+                if data is None:
+                    return
+                html = render_indicators_page(data, options=options, csrf_token=session["csrf_token"])
             elif path == "/topics":
                 from .topics import render_topics
 
@@ -354,6 +388,8 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                 html = render_sources_list(
                     [PublisherSource(**source) for source in data["sources"]],
                     session["csrf_token"],
+                    health=data.get("health"),
+                    excluded=data.get("excluded"),
                 )
             else:
                 self.redirect("/account")

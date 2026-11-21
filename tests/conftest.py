@@ -8,3 +8,9 @@ def no_real_whisper(monkeypatch):
     # Never download from YouTube in tests either.
     monkeypatch.setenv('INTEL_SOURCERER_UVX', '/nonexistent/uvx')
     monkeypatch.delenv('INTEL_SOURCERER_YTDLP', raising=False)
+
+
+@pytest.fixture(autouse=True)
+def no_real_ai_settings(monkeypatch, tmp_path):
+    """Tests never read or write the real AI settings file."""
+    monkeypatch.setenv("INTEL_AI_SETTINGS", str(tmp_path / "ai_settings.json"))

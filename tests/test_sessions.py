@@ -43,6 +43,43 @@ def test_queue_notes_and_resume(tmp_path):
     db.close()
 
 
+def test_update_queue_preserves_cursor_reorders_and_clears(tmp_path):
+    from intel_sourcerer.sessions import update_queue
+
+    db = _reading_db(tmp_path)
+    a, b = 'https://example.com/a', 'https://example.com/b'
+    q = update_queue(db, [a, b])
+    assert [i['url'] for i in q['items']] == [a, b] and q['cursor'] == 0 and not q['finished']
+    q = navigate(db, q['id'], 0, 'next')
+    assert q['cursor'] == 1
+    q = update_queue(db, [b, a])
+    assert [i['url'] for i in q['items']] == [b, a] and q['cursor'] == 0 and not q['finished']
+    cleared = update_queue(db, [])
+    assert cleared['items'] == [] and cleared['finished'] is True
+    restarted = update_queue(db, [a])
+    assert [i['url'] for i in restarted['items']] == [a] and restarted['cursor'] == 0 and not restarted['finished']
+    db.close()
+
+
+def test_queue_enforces_reasonable_session_limit(tmp_path):
+    from intel_sourcerer.sessions import MAX_QUEUE_ITEMS, update_queue
+
+    db = connect_database(tmp_path / 'limit.sqlite3')
+    save_source(db, PublisherSource('test', 'Test', 'https://example.com', 'ai_lab'))
+    urls = []
+    for i in range(MAX_QUEUE_ITEMS + 2):
+        url = f'https://example.com/{i}'
+        save_article(db, 'test', Article('Test', f'R{i}', url, str(i), datetime(2026, 1, 1, tzinfo=timezone.utc), None, None, ''), content='body', error=None, reason='match', discovered_at='2026-11-01T00:00:00+00:00')
+        urls.append(url)
+    db.commit()
+    assert len(create_queue(db, urls[:MAX_QUEUE_ITEMS])['items']) == MAX_QUEUE_ITEMS
+    with pytest.raises(SessionError):
+        create_queue(db, urls[:MAX_QUEUE_ITEMS + 1])
+    with pytest.raises(SessionError):
+        update_queue(db, urls[:MAX_QUEUE_ITEMS + 1])
+    db.close()
+
+
 def test_rich_notes_sanitize_and_preserve_formatting():
     from intel_sourcerer.sessions import clean_notes
     result=clean_notes('<blockquote onclick="bad()"><b style="background-color: yellow">Finding</b><img src=x onerror="bad()"></blockquote>')
@@ -166,3 +203,20 @@ def test_new_columns_upgrade_an_existing_database(tmp_path):
     db=connect_database(path)
     assert 'triage' in {row[1] for row in db.execute('PRAGMA table_info(articles)')}
     assert db.execute('SELECT COUNT(*) FROM article_highlights').fetchone()[0]==0
+
+
+def test_reordering_starts_from_the_first_unread_article(tmp_path):
+    from intel_sourcerer.sessions import update_queue
+
+    db = _reading_db(tmp_path)
+    a, b = 'https://example.com/a', 'https://example.com/b'
+    q = update_queue(db, [a, b])
+    assert q['cursor'] == 0
+    # Dragging b to the top makes it the article you start with, not a, which was added first.
+    q = update_queue(db, [b, a])
+    assert q['items'][q['cursor']]['url'] == b
+    # Read articles are skipped: with b read, the next one is a, even though b stays on top.
+    db.execute('UPDATE articles SET is_read=1 WHERE url=?', (b,))
+    q = update_queue(db, [b, a])
+    assert q['items'][q['cursor']]['url'] == a
+    db.close()

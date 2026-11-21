@@ -7,10 +7,10 @@ async function libraryAPI(path, data) {
     data === undefined
       ? {}
       : {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-CSRF-Token": token },
-          body: JSON.stringify(data),
-        },
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": token },
+        body: JSON.stringify(data),
+      },
   );
   const result = await response.json();
   if (!response.ok)
@@ -20,7 +20,7 @@ async function libraryAPI(path, data) {
 async function importPlaylistJob(url) {
   const started = await libraryAPI("/api/jobs/playlist", { url });
   if (!started?.id) return started;
-  for (;;) {
+  for (; ;) {
     await new Promise((resolve) => setTimeout(resolve, 1200));
     const job = await libraryAPI("/api/jobs?" + new URLSearchParams({ id: started.id }));
     if (job.state === "done") return job.result;
@@ -49,7 +49,12 @@ confirmDelete.addEventListener("click", async () => {
     await libraryAPI("/api/delete-article", { url: deleteButton.dataset.url });
     try {
       localStorage.removeItem(userStoragePrefix + "intel-draft:" + deleteButton.dataset.url);
-    } catch {}
+      const raw = JSON.parse(localStorage.getItem(userStoragePrefix + "intel-queue-draft") || "[]");
+      if (Array.isArray(raw)) {
+        const next = raw.filter((u) => u !== deleteButton.dataset.url);
+        localStorage.setItem(userStoragePrefix + "intel-queue-draft", JSON.stringify(next));
+      }
+    } catch { }
     const url = new URL(location.href);
     url.searchParams.delete("selected");
     location.assign(url);
@@ -70,7 +75,7 @@ const isPlaylist = (url) => /^https?:\/\/(www\.|m\.)?youtube\.com\/playlist\?/i.
 async function addLinks(text) {
   if (importing) return;
   const urls = [
-    ...new Set(( /^(?:file:\/\/|\/|~\/)/i.test(text.trim()) ? text.trim().split(/\r?\n/).filter(Boolean) : text.split(/\s+/).filter((url) => /^https?:\/\//i.test(url)) )),
+    ...new Set((/^(?:file:\/\/|\/|~\/)/i.test(text.trim()) ? text.trim().split(/\r?\n/).filter(Boolean) : text.split(/\s+/).filter((url) => /^https?:\/\//i.test(url)))),
   ].slice(0, 20);
   feedback.hidden = false;
   if (!urls.length) {
@@ -138,7 +143,7 @@ drop.addEventListener("drop", (event) => {
   }
   addLinks(
     event.dataTransfer.getData("text/uri-list") ||
-      event.dataTransfer.getData("text/plain"),
+    event.dataTransfer.getData("text/plain"),
   );
 });
 
@@ -177,7 +182,7 @@ const renameInput = document.getElementById('article-new-title');
 const renameError = document.getElementById('rename-error');
 const renameSave = document.getElementById('save-rename');
 renameButton?.addEventListener('click', () => {
-  renameInput.value = document.querySelector('.lib-detail > h2').textContent;
+  renameInput.value = document.querySelector('#lib-panel-details > h2').textContent;
   renameError.hidden = true;
   renameDialog.showModal();
   renameInput.focus();
@@ -188,7 +193,7 @@ document.getElementById('rename-form').addEventListener('submit', async (event) 
   event.preventDefault();
   renameSave.disabled = true;
   try {
-    await libraryAPI('/api/rename-article', {url: renameButton.dataset.url, title: renameInput.value});
+    await libraryAPI('/api/rename-article', { url: renameButton.dataset.url, title: renameInput.value });
     location.reload();
   } catch (error) {
     renameError.textContent = error.message;
@@ -198,9 +203,9 @@ document.getElementById('rename-form').addEventListener('submit', async (event) 
   }
 });
 
-const tagBox = document.getElementById("lib-tag-editor");
-if (tagBox) {
-  const editor = mountTagEditor(tagBox, {
+const topicBox = document.getElementById("lib-topic-editor");
+if (topicBox) {
+  const editor = mountTopicEditor(topicBox, {
     post: libraryAPI,
     onError(message) {
       feedback.hidden = false;
@@ -219,27 +224,302 @@ if (tagBox) {
       row.hidden = !names.length;
     },
   });
-  fetch("/api/tags?" + new URLSearchParams({ url: tagBox.dataset.url }))
+  fetch("/api/article-topics?" + new URLSearchParams({ url: topicBox.dataset.url }))
     .then((response) => (response.ok ? response.json() : Promise.reject()))
-    .then((data) => editor.show(tagBox.dataset.url, data))
+    .then((data) => editor.show(topicBox.dataset.url, data))
     .catch(() => {
-      tagBox.hidden = true;
+      topicBox.hidden = true;
     });
 }
-// Tag and type menus close on an outside click, and opening one closes the other.
-const filterMenus = document.querySelectorAll(".lib-tag-menu");
+// Filter menus close on an outside click, and opening one closes siblings.
+const outerFilterMenu = document.querySelector(".lib-more-filters");
+const filterMenus = document.querySelectorAll(".lib-tag-menu, .lib-filter-menu");
+for (const menu of filterMenus) {
+  menu.addEventListener("toggle", () => {
+    if (!menu.open) return;
+    for (const other of filterMenus) if (other !== menu) other.open = false;
+  });
+}
 document.addEventListener("click", (event) => {
+  if (outerFilterMenu?.open && !outerFilterMenu.contains(event.target)) outerFilterMenu.open = false;
   for (const menu of filterMenus)
     if (menu.open && !menu.contains(event.target)) menu.open = false;
 });
 const articleList = document.querySelector(".lib-list"),
   selectedArticle = articleList?.querySelector(".lib-item.selected");
-// The page reloads on selection, so bring a selected row further down the list back into view.
-if (selectedArticle && selectedArticle.getBoundingClientRect().bottom > articleList.getBoundingClientRect().bottom)
+// The page reloads on selection, so bring a selected row further down the list back into view below the sticky header.
+if (selectedArticle && selectedArticle.getBoundingClientRect().bottom > articleList.getBoundingClientRect().bottom) {
+  const stickyHead = articleList.querySelector(".lib-list-head")?.getBoundingClientRect().height || 0;
   articleList.scrollTop +=
-    selectedArticle.getBoundingClientRect().top - articleList.getBoundingClientRect().top;
+    selectedArticle.getBoundingClientRect().top - articleList.getBoundingClientRect().top - stickyHead - 4;
+}
 // On narrow screens the details sit below the list, so tapping an article jumps down to them.
 if (matchMedia("(max-width: 899px)").matches)
   document.querySelectorAll(".lib-item").forEach((item) => {
     item.hash = "lib-details";
   });
+
+// --- Single Server-Backed Reading Queue (shared live with Home & Reader via /api/queue) ---
+const MAX_QUEUE_ITEMS = 10;
+let activeQueue = null;
+let draggingQueueURL = null;
+
+function formatDuration(mins) {
+  if (!mins || mins < 60) return `${mins || 0} min`;
+  const h = Math.floor(mins / 60),
+    m = mins % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+function queueItems() {
+  return activeQueue && !activeQueue.finished && Array.isArray(activeQueue.items) ? activeQueue.items : [];
+}
+
+function queueURLs() {
+  return queueItems().map((item) => item.url);
+}
+
+async function saveServerQueue(urls) {
+  try {
+    activeQueue = await libraryAPI("/api/queue-update", { urls });
+    renderLibraryQueue();
+  } catch (error) {
+    feedback.hidden = false;
+    feedback.textContent = error.message;
+  }
+}
+
+function syncQueueButtons() {
+  const queued = new Set(queueURLs());
+  const full = queued.size >= MAX_QUEUE_ITEMS;
+  // Move queued items visually to the top Reading Queue section by hiding duplicates in the list below.
+  document.querySelectorAll(".lib-item-row[data-url]").forEach((row) => {
+    row.hidden = queued.has(row.dataset.url);
+  });
+  document.querySelectorAll("[data-queue-url]").forEach((btn) => {
+    const inQueue = queued.has(btn.dataset.queueUrl);
+    btn.textContent = inQueue ? "Queued ✓" : "+ Queue";
+    btn.setAttribute("aria-pressed", String(inQueue));
+    btn.classList.toggle("is-queued", inQueue);
+    btn.disabled = !inQueue && full;
+    btn.title = !inQueue && full ? `Queue is full (${MAX_QUEUE_ITEMS} articles max)` : "";
+  });
+  const visibleRows = [...document.querySelectorAll(".lib-item-row[data-url]")];
+  const visibleBtn = document.getElementById("lib-queue-visible");
+  if (visibleBtn) {
+    const remaining = visibleRows.filter((r) => !queued.has(r.dataset.url)).length;
+    const slots = Math.max(0, MAX_QUEUE_ITEMS - queued.size);
+    const canAdd = Math.min(remaining, slots);
+    visibleBtn.hidden = !visibleRows.length;
+    visibleBtn.disabled = canAdd === 0;
+    visibleBtn.textContent = full
+      ? `Queue full (${queued.size}/${MAX_QUEUE_ITEMS})`
+      : canAdd
+        ? `+ Queue next ${canAdd}`
+        : "All shown queued ✓";
+  }
+}
+
+async function placeQueueItem(url, beforeURL = null) {
+  if (url === beforeURL) return;
+  const urls = queueURLs();
+  const from = urls.indexOf(url);
+  if (from < 0) return;
+  urls.splice(from, 1);
+  const idx = beforeURL ? urls.indexOf(beforeURL) : -1;
+  urls.splice(idx < 0 ? urls.length : idx, 0, url);
+  await saveServerQueue(urls);
+}
+
+function renderLibraryQueue() {
+  const items = queueItems();
+  const panelEl = document.getElementById("lib-panel-queue");
+  const countEl = document.getElementById("lib-queue-count");
+  const metaEl = document.getElementById("lib-queue-meta");
+  const listEl = document.getElementById("lib-queue-list");
+  const startBtn = document.getElementById("lib-start-queue");
+  if (!listEl) return;
+
+  const resuming = Boolean(activeQueue && !activeQueue.finished && (activeQueue.cursor > 0 || activeQueue.read_count > 0));
+  if (panelEl) panelEl.hidden = items.length === 0;
+  if (countEl) countEl.textContent = `${items.length}/${MAX_QUEUE_ITEMS}`;
+  if (startBtn) startBtn.textContent = resuming ? "Resume reading" : "Start reading";
+  if (!items.length) {
+    const topicForm = document.getElementById("lib-save-topic-form");
+    if (topicForm) topicForm.hidden = true;
+  }
+
+  const totalMinutes = items.reduce((sum, item) => sum + (item.minutes || 5), 0);
+  if (metaEl) {
+    metaEl.textContent = `~${formatDuration(totalMinutes)} · Drag to reorder`;
+  }
+
+  const selectedURL =
+    document.querySelector(".lib-detail-queue[data-queue-url]")?.dataset.queueUrl ||
+    new URLSearchParams(location.search).get("selected") ||
+    "";
+  const narrow = matchMedia("(max-width: 899px)").matches;
+
+  listEl.replaceChildren(
+    ...items.map((item, idx) => {
+      const url = item.url;
+      const isCurrent = Boolean(resuming && activeQueue.cursor === idx);
+      const isSelected = selectedURL === url;
+      const li = document.createElement("li");
+      li.className = "lib-queue-item" + (isSelected ? " selected" : isCurrent ? " is-current" : "");
+      li.draggable = true;
+      li.dataset.url = url;
+      li.addEventListener("dragstart", (event) => {
+        draggingQueueURL = url;
+        li.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", url);
+      });
+      li.addEventListener("dragend", () => {
+        draggingQueueURL = null;
+        li.classList.remove("dragging");
+      });
+      li.addEventListener("dragover", (event) => {
+        if (!draggingQueueURL) return;
+        event.preventDefault();
+        li.classList.add("drag-target");
+      });
+      li.addEventListener("dragleave", () => li.classList.remove("drag-target"));
+      li.addEventListener("drop", (event) => {
+        if (!draggingQueueURL) return;
+        event.preventDefault();
+        li.classList.remove("drag-target");
+        placeQueueItem(draggingQueueURL, url);
+      });
+
+      const handle = document.createElement("span");
+      handle.className = "lib-queue-handle";
+      handle.setAttribute("aria-hidden", "true");
+      handle.textContent = "≡";
+
+      const selectURL = new URL(location.href);
+      selectURL.searchParams.set("selected", url);
+      selectURL.searchParams.delete("panel");
+      if (narrow) selectURL.hash = "lib-details";
+
+      const copy = document.createElement("a");
+      copy.className = "lib-queue-copy";
+      copy.href = selectURL.pathname + selectURL.search + selectURL.hash;
+      const titleEl = document.createElement("span");
+      titleEl.className = "lib-queue-title";
+      titleEl.textContent = item.title || url;
+      const sub = document.createElement("span");
+      sub.className = "lib-queue-sub muted";
+      sub.textContent = [
+        isCurrent ? "Up next" : item.is_read ? "Read" : "",
+        item.publisher,
+        item.minutes ? `~${formatDuration(item.minutes)}` : "",
+      ].filter(Boolean).join(" · ");
+      copy.append(titleEl, sub);
+
+      const controls = document.createElement("div");
+      controls.className = "lib-queue-controls";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", `Remove ${item.title} from queue`);
+      remove.onclick = () => saveServerQueue(queueURLs().filter((u) => u !== url));
+      controls.append(remove);
+
+      li.append(handle, copy, controls);
+      return li;
+    }),
+  );
+  syncQueueButtons();
+}
+
+async function toggleQueueURL(url) {
+  if (!url) return;
+  const urls = queueURLs();
+  if (urls.includes(url)) {
+    await saveServerQueue(urls.filter((u) => u !== url));
+  } else {
+    if (urls.length >= MAX_QUEUE_ITEMS) {
+      feedback.hidden = false;
+      feedback.textContent = `Queue is full (${MAX_QUEUE_ITEMS} articles max). Finish or remove one to add more.`;
+      return;
+    }
+    await saveServerQueue([...urls, url]);
+  }
+}
+
+function startReadingQueue() {
+  if (!queueItems().length) return;
+  location.assign("/?view=reader");
+}
+
+document.querySelectorAll("[data-queue-url]").forEach((btn) => {
+  btn.addEventListener("click", () => toggleQueueURL(btn.dataset.queueUrl));
+});
+document.getElementById("lib-queue-visible")?.addEventListener("click", () => {
+  const urls = queueURLs();
+  const existing = new Set(urls);
+  for (const row of document.querySelectorAll(".lib-item-row[data-url]")) {
+    const url = row.dataset.url;
+    if (!existing.has(url) && urls.length < MAX_QUEUE_ITEMS) {
+      urls.push(url);
+      existing.add(url);
+    }
+  }
+  saveServerQueue(urls);
+});
+document.getElementById("lib-start-queue")?.addEventListener("click", startReadingQueue);
+document.getElementById("lib-clear-queue-top")?.addEventListener("click", () => saveServerQueue([]));
+
+const libSaveTopicOpen = document.getElementById("lib-save-topic-open");
+const libSaveTopicForm = document.getElementById("lib-save-topic-form");
+const libSaveTopicName = document.getElementById("lib-save-topic-name");
+const libSaveTopicStatus = document.getElementById("lib-save-topic-status");
+const libSaveTopicLink = document.getElementById("lib-save-topic-link");
+const libTopicNames = document.getElementById("lib-topic-names");
+let topicsLoaded = false;
+
+libSaveTopicOpen?.addEventListener("click", async () => {
+  libSaveTopicForm.hidden = !libSaveTopicForm.hidden;
+  libSaveTopicStatus.hidden = true;
+  if (!libSaveTopicForm.hidden) {
+    libSaveTopicName.focus();
+    if (!topicsLoaded && libTopicNames) {
+      topicsLoaded = true;
+      try {
+        const res = await libraryAPI("/api/topics");
+        libTopicNames.replaceChildren(...(res.topics || []).map((t) => new Option(t.name, t.name)));
+      } catch {}
+    }
+  }
+});
+libSaveTopicForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = libSaveTopicName.value.trim();
+  const urls = queueURLs();
+  if (!name || !urls.length) return;
+  const submit = libSaveTopicForm.querySelector("button[type=submit]");
+  submit.disabled = true;
+  try {
+    const saved = await libraryAPI("/api/topic-from-articles", { name, urls: urls.slice(0, 100) });
+    libSaveTopicName.value = "";
+    libSaveTopicForm.hidden = true;
+    libSaveTopicStatus.hidden = false;
+    libSaveTopicStatus.firstElementChild.textContent = `Saved ${saved.added} ${saved.added === 1 ? "article" : "articles"} to `;
+    libSaveTopicLink.href = "/topic?" + new URLSearchParams({ id: saved.id });
+    libSaveTopicLink.textContent = saved.name;
+  } catch (error) {
+    feedback.hidden = false;
+    feedback.textContent = error.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+renderLibraryQueue();
+libraryAPI("/api/queue")
+  .then((data) => {
+    activeQueue = data.queue || null;
+    renderLibraryQueue();
+  })
+  .catch(() => {});

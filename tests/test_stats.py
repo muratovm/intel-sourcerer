@@ -19,4 +19,12 @@ def test_first_read_history_and_toronto_date(tmp_path):
     page=render_stats(db,datetime(2026,10,2,12,tzinfo=timezone.utc))
     assert '2026-10-01: 1 article read' in page
     assert '1 article read · 1 active day' in page
+    assert 'America/Toronto' in page
     assert db.execute('SELECT count(*) FROM article_reads').fetchone()[0]==1
+
+
+def test_stats_displays_configured_timezone(tmp_path, monkeypatch):
+    monkeypatch.setenv('INTEL_TIMEZONE', 'UTC')
+    db = connect_database(tmp_path / 'stats_tz.db')
+    page = render_stats(db, datetime(2026, 10, 2, 12, tzinfo=timezone.utc))
+    assert '· UTC' in page and 'America/Toronto' not in page

@@ -18,6 +18,7 @@ import {
 } from "/workspace/highlights.js";
 import { renderIOCs as renderArticleIOCs, renderRelated as renderArticleRelated } from "/workspace/iocs.js";
 import { initPaneDivider, initTextScale } from "/workspace/panes.js";
+import { initShortcuts } from "/workspace/shortcuts.js";
 
 const $ = (id) => document.getElementById(id);
 let standaloneURL = null;
@@ -71,6 +72,13 @@ function dateLabel(date) {
     year: "numeric",
     timeZone: "America/Toronto",
   }).format(new Date(date));
+}
+let replayingHistory = false;
+function syncHistory(search = "") {
+  if (replayingHistory || isTemporarySession() || !window.history?.pushState) return;
+  const target = "/" + (search ? "?" + search : "");
+  const current = location.pathname + location.search;
+  if (current !== target) history.pushState({ search }, "", target);
 }
 function show(view) {
   $("setup").inert = false;
@@ -143,20 +151,51 @@ function setBusy(value) {
           (b.dataset.action === "previous" && state?.queue?.cursor === 0)),
     );
 }
+const MAX_QUEUE_ITEMS = 10;
 let draftQueue = [],
   draggingURL = null;
+function loadQueueDraft() {
+  const draft = readJSON(storagePrefix() + "intel-queue-draft");
+  if (Array.isArray(draft)) {
+    draftQueue = [
+      ...new Set(
+        draft.filter((url) => state?.articles?.some((a) => a.url === url)),
+      ),
+    ].slice(0, MAX_QUEUE_ITEMS);
+  } else {
+    draftQueue = [];
+  }
+}
 function saveQueueDraft() {
   writeJSON(storagePrefix() + "intel-queue-draft", draftQueue);
+  if (state?.articles) {
+    const existing = readJSON(storagePrefix() + "intel-queue-meta");
+    const meta = existing && typeof existing === "object" ? existing : {};
+    const byURL = new Map(state.articles.map((a) => [a.url, a]));
+    for (const url of draftQueue) {
+      const art = byURL.get(url);
+      if (art) {
+        meta[url] = {
+          title: art.title,
+          publisher: art.publisher,
+          minutes: gymData?.article_minutes?.[url] || meta[url]?.minutes || 5,
+        };
+      }
+    }
+    writeJSON(storagePrefix() + "intel-queue-meta", meta);
+  }
+}
+function openQueueBuilder() {
+  if (isTemporarySession()) {
+    renderSetup();
+  } else {
+    location.assign("/library?panel=queue");
+  }
 }
 function renderSetup() {
   show("setup");
-  const draft = readJSON(storagePrefix() + "intel-queue-draft");
-  if (Array.isArray(draft))
-    draftQueue = [
-      ...new Set(
-        draft.filter((url) => state.articles.some((a) => a.url === url)),
-      ),
-    ].slice(0, 100);
+  syncHistory("view=builder");
+  loadQueueDraft();
   renderBuilder();
   loadBuilderTopics();
 }
@@ -185,90 +224,473 @@ function renderBuilderTopics() {
   $("article-topic-field").hidden = !topics.length;
   $("save-topic-names").replaceChildren(...topics.map((topic) => new Option(topic.name, topic.name)));
 }
-function renderHome() {
+function renderHome(skipFetch = false) {
   currentArticle = null;
   noteModel = null;
   show("home");
-  const q = state.queue,
-    active = q && !q.finished && q.items.length;
-  $("home-current").replaceChildren();
-  if (active) {
-    const item = q.items[q.cursor],
-      heading = document.createElement("h2"),
-      meta = document.createElement("p");
-    heading.textContent = item.title;
-    meta.className = "muted";
-    meta.textContent = `${item.publisher} · ${dateLabel(item.published_at)}`;
-    const chip = formatChip(state.articles.find((article) => article.url === item.url));
-    if (chip) meta.prepend(chip);
-    $("home-current").append(heading, meta);
-  } else {
-    const heading = document.createElement("h2");
-    heading.textContent = q
-      ? "Your last queue is complete."
-      : "Your first reading session starts here.";
-    $("home-current").append(heading);
+  syncHistory("");
+  renderWatchlist();
+  if (gymData) renderGym();
+  if (!skipFetch) loadAndRenderGym();
+}
+let gymData = null,
+  gymEffort = "all",
+  gymFilter = null,
+  homeQueueExpanded = false;
+
+async function loadAndRenderGym() {
+  if (isTemporarySession()) return;
+  try {
+    gymData = await api("/api/home-gym");
+  } catch {
+    gymData = null;
   }
-  $("home-progress-text").textContent = q
-    ? `${q.read_count} of ${q.items.length} articles read · ${Math.round((q.read_count / q.items.length) * 100)}%`
-    : "Choose a few articles to start your queue.";
-  $("home-progress").hidden = !q;
-  $("home-progress").max = q?.items.length || 1;
-  $("home-progress").value = q?.read_count || 0;
-  $("resume-reading").hidden = !active;
-  renderTriage();
-  $("recent-notes").replaceChildren();
-  $("home-library-count").textContent = `${state.articles.length} saved articles`;
-  $("home-in-progress").hidden = !state.in_progress;
-  $("home-in-progress").firstElementChild.textContent = `${state.in_progress} ${state.in_progress === 1 ? "article" : "articles"} in progress`;
-  const noted = state.articles
-    .filter((a) => a.has_notes)
-    .sort((a, b) =>
-      (b.notes_updated_at || "").localeCompare(a.notes_updated_at || ""),
-    )
-    .slice(0, 5);
-  if (!noted.length) {
-    const empty = document.createElement("p");
-    empty.className = "muted";
-    empty.textContent =
-      "Your saved takeaways will appear here as you read and take notes.";
-    $("recent-notes").append(empty);
-  }
-  for (const article of noted) {
-    const row = document.createElement("article");
-    row.className = "home-note";
-    const source = document.createElement("div"),
-      publisher = document.createElement("strong"),
-      date = document.createElement("p"),
-      copy = document.createElement("div"),
-      link = document.createElement("button"),
-      preview = document.createElement("p");
-    publisher.textContent = article.publisher;
-    date.textContent = dateLabel(article.published_at);
-    date.className = "muted";
-    const chip = formatChip(article);
-    if (chip) date.prepend(chip);
-    source.append(publisher, date);
-    link.className = "note-article-link";
-    link.textContent = article.title;
-    link.onclick = async () => {
-      link.disabled = true;
-      try {
-        standaloneURL = article.url;
-        await renderQueue();
-      } catch (error) {
-        notice(error.message);
-        link.disabled = false;
-      }
-    };
-    preview.textContent = article.note_preview;
-    preview.className = "muted";
-    copy.append(link, preview);
-    row.append(source, copy);
-    $("recent-notes").append(row);
+  renderGym();
+}
+
+function formatDuration(mins) {
+  if (!mins || mins < 60) return `${mins || 0} min`;
+  const h = Math.floor(mins / 60),
+    m = mins % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+function activeQueueItems() {
+  return state?.queue && !state.queue.finished && Array.isArray(state.queue.items) ? state.queue.items : [];
+}
+
+let draggingHomeQueueURL = null;
+async function updateServerQueue(urls) {
+  try {
+    state.queue = await api("/api/queue-update", { urls });
+    renderGym();
+  } catch (error) {
+    notice(error.message);
   }
 }
-let triageUndo = null;
+
+async function toggleQueueArticle(article) {
+  if (!article?.url) return;
+  const current = activeQueueItems().map((item) => item.url);
+  if (current.includes(article.url)) {
+    await updateServerQueue(current.filter((u) => u !== article.url));
+  } else {
+    if (current.length >= MAX_QUEUE_ITEMS) {
+      notice(`Queue is full (${MAX_QUEUE_ITEMS} articles max). Finish or remove one to add more.`);
+      return;
+    }
+    await updateServerQueue([...current, article.url]);
+  }
+}
+
+function renderGym() {
+  if (!gymData || !state || $("home").hidden) return;
+  const pulse = gymData.pulse || {};
+  // 1. Mini 8-week heatmap
+  const mapEl = $("gym-heatmap");
+  mapEl.replaceChildren(
+    ...(pulse.heatmap || []).map((cell) => {
+      const sq = document.createElement("span");
+      sq.className = `heat-day level-${cell.level}${cell.future ? " future" : ""}`;
+      sq.title = cell.future
+        ? `${cell.date}: upcoming`
+        : `${cell.date}: ${cell.count} ${cell.count === 1 ? "report" : "reports"} read`;
+      return sq;
+    }),
+  );
+  const weekParts = [`${pulse.week_read || 0} read`];
+  if (pulse.week_minutes) weekParts.push(`${formatDuration(pulse.week_minutes)} focused`);
+  weekParts.push(`${pulse.week_notes || 0} ${pulse.week_notes === 1 ? "note" : "notes"}`);
+  $("gym-week-summary").textContent = `This week: ${weekParts.join(" · ")}`;
+  $("gym-month-summary").textContent =
+    `${pulse.active_days_30d || 0} active ${pulse.active_days_30d === 1 ? "day" : "days"} in the last 30 days · ${state.articles.length} saved reports`;
+
+  // 2. Research focus themes
+  $("gym-window-label").textContent = gymData.window_label || "";
+  const themes = gymData.themes || [];
+  $("gym-themes").replaceChildren(
+    ...themes.map((theme) => {
+      const card = document.createElement("article");
+      card.className = "gym-theme-card" + (gymFilter?.kind === "theme" && gymFilter.label === theme.name ? " is-active" : "");
+      const title = document.createElement("h3");
+      title.textContent = theme.name;
+      const stats = document.createElement("p");
+      stats.className = "gym-theme-stats";
+      stats.textContent = `${theme.count} ${theme.count === 1 ? "report" : "reports"} · ${theme.publishers} ${theme.publishers === 1 ? "publisher" : "publishers"}`;
+      const desc = document.createElement("p");
+      desc.className = "muted gym-theme-desc";
+      desc.textContent = theme.top_indicator
+        ? `Top signal: ${theme.top_indicator.label}`
+        : theme.description;
+      const foot = document.createElement("div");
+      foot.className = "gym-theme-foot";
+      const focusBtn = document.createElement("button");
+      focusBtn.type = "button";
+      focusBtn.className = "gym-theme-action";
+      focusBtn.textContent =
+        gymFilter?.kind === "theme" && gymFilter.label === theme.name
+          ? "Showing these ✓"
+          : `Focus (${theme.unread} unread) →`;
+      focusBtn.onclick = () => {
+        if (gymFilter?.kind === "theme" && gymFilter.label === theme.name) gymFilter = null;
+        else gymFilter = { kind: "theme", label: theme.name, urls: new Set(theme.urls) };
+        renderGym();
+      };
+      foot.append(focusBtn);
+      card.append(title, stats, desc, foot);
+      return card;
+    }),
+  );
+
+  // Recurring indicators across labs
+  const recurring = gymData.recurring || [];
+  $("gym-recurring").hidden = !recurring.length;
+  $("gym-recurring-list").replaceChildren(
+    ...recurring.map((item) => {
+      const pill = document.createElement("button");
+      pill.type = "button";
+      pill.className =
+        "gym-signal-pill" +
+        (item.kev ? " is-kev" : "") +
+        (gymFilter?.kind === "ioc" && gymFilter.label === item.value ? " is-active" : "");
+      pill.textContent = item.name ? `${item.value} · ${item.name}` : item.value;
+      pill.title = `${item.reports} reports across ${item.publishers} publishers`;
+      pill.onclick = () => {
+        if (gymFilter?.kind === "ioc" && gymFilter.label === item.value) gymFilter = null;
+        else gymFilter = { kind: "ioc", label: item.value, urls: new Set(item.urls) };
+        renderGym();
+      };
+      return pill;
+    }),
+  );
+
+  // 3. Single active reading queue card
+  const q = state.queue,
+    qItems = activeQueueItems(),
+    active = qItems.length > 0;
+  const minutesMap = gymData.article_minutes || {};
+  $("gym-continue").hidden = !active;
+  if (!active) homeQueueExpanded = false;
+  if (active) {
+    const item = qItems[Math.min(q.cursor, qItems.length - 1)];
+    const totalMin = qItems.reduce((sum, entry) => sum + (entry.minutes || minutesMap[entry.url] || 5), 0);
+    const resuming = q.cursor > 0 || q.read_count > 0;
+    // Pull toward finishing: what's done, what's left, how long it has waited, and a next step sized to one article.
+    const minutesOf = (entry) => entry.minutes || minutesMap[entry.url] || 5;
+    const readCount = qItems.filter((entry) => entry.is_read).length;
+    const leftCount = qItems.length - readCount;
+    const leftMin = qItems.reduce((sum, entry) => sum + (entry.is_read ? 0 : minutesOf(entry)), 0);
+    const nextMin = minutesOf(item);
+    const started = q.created_at ? new Date(q.created_at) : null;
+    const ageDays = started && !Number.isNaN(started.getTime()) ? Math.floor((Date.now() - started.getTime()) / 86400000) : 0;
+    const waiting = ageDays >= 3;
+    $("gym-continue").classList.toggle("is-waiting", waiting);
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    $("gym-continue-eyebrow").textContent = [
+      readCount ? `${readCount} OF ${qItems.length} READ` : `${plural(qItems.length, "ARTICLE").toUpperCase()} WAITING`,
+      waiting ? `QUEUED ${ageDays} DAYS AGO` : resuming ? "PICK UP WHERE YOU LEFT OFF" : "",
+    ].filter(Boolean).join(" · ");
+    $("gym-continue-title").textContent = item.title;
+    $("gym-continue-meta").textContent = [
+      item.publisher,
+      `this one ~${formatDuration(nextMin)}`,
+      leftCount > 1
+        ? `~${formatDuration(leftMin)} to finish ${readCount ? "the remaining" : "all"} ${leftCount}`
+        : "last one in the queue",
+    ].join(" · ");
+    const progress = $("gym-queue-progress");
+    progress.setAttribute("aria-label", `${readCount} of ${qItems.length} read`);
+    progress.replaceChildren(
+      ...qItems.map((entry, idx) => {
+        const seg = document.createElement("span");
+        seg.className = entry.is_read ? "done" : idx === q.cursor ? "current" : "";
+        seg.style.flexGrow = String(minutesOf(entry));
+        seg.title = `${entry.title} · ~${formatDuration(minutesOf(entry))}${entry.is_read ? " · read" : ""}`;
+        return seg;
+      }),
+    );
+    $("gym-continue-btn").textContent = `${resuming ? "Read next" : "Start"} · ~${formatDuration(nextMin)} →`;
+    $("gym-continue-btn").onclick = () => {
+      standaloneURL = null;
+      renderQueue().catch((error) => notice(error.message));
+    };
+    const toggleBtn = $("gym-queue-toggle");
+    const queueList = $("gym-queue-list");
+    if (toggleBtn && queueList) {
+      // A full-width row under the card reads as "open this list", where a small dropdown button did not.
+      const count = `${qItems.length} ${qItems.length === 1 ? "article" : "articles"}`;
+      const next = qItems[Math.min(q.cursor + 1, qItems.length - 1)];
+      toggleBtn.querySelector(".gym-queue-toggle-label").textContent = homeQueueExpanded
+        ? `Hide the ${count} in this queue`
+        : `Show all ${count} in this queue`;
+      toggleBtn.querySelector(".gym-queue-toggle-hint").textContent =
+        !homeQueueExpanded && qItems.length > 1 && next !== item ? `Then: ${next.title}` : "";
+      toggleBtn.setAttribute("aria-expanded", String(homeQueueExpanded));
+      queueList.hidden = !homeQueueExpanded;
+      if (homeQueueExpanded) {
+        const urls = qItems.map((entry) => entry.url);
+        queueList.replaceChildren(
+          ...qItems.map((entry, idx) => {
+            const li = document.createElement("li");
+            const isCurrent = idx === q.cursor;
+            li.className = "gym-queue-item" + (isCurrent ? " is-current" : "");
+            // Same whole-row drag as the Library's queue panel: drop a row onto another to place it there.
+            li.draggable = true;
+            li.dataset.url = entry.url;
+            li.addEventListener("dragstart", (event) => {
+              draggingHomeQueueURL = entry.url;
+              li.classList.add("dragging");
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", entry.url);
+            });
+            li.addEventListener("dragend", () => {
+              draggingHomeQueueURL = null;
+              li.classList.remove("dragging");
+            });
+            li.addEventListener("dragover", (event) => {
+              if (!draggingHomeQueueURL) return;
+              event.preventDefault();
+              li.classList.add("drag-target");
+            });
+            li.addEventListener("dragleave", () => li.classList.remove("drag-target"));
+            li.addEventListener("drop", (event) => {
+              if (!draggingHomeQueueURL || draggingHomeQueueURL === entry.url) return;
+              event.preventDefault();
+              li.classList.remove("drag-target");
+              const next = urls.filter((u) => u !== draggingHomeQueueURL);
+              next.splice(next.indexOf(entry.url), 0, draggingHomeQueueURL);
+              updateServerQueue(next);
+            });
+            const num = document.createElement("span");
+            num.className = "gym-queue-num muted";
+            num.textContent = "≡";
+            num.setAttribute("aria-hidden", "true");
+            const copy = document.createElement("div");
+            copy.className = "gym-queue-copy";
+            const titleBtn = document.createElement("button");
+            titleBtn.type = "button";
+            titleBtn.className = "note-article-link";
+            titleBtn.textContent = entry.title;
+            titleBtn.onclick = () => openStandalone(entry.url);
+            const mins = entry.minutes || minutesMap[entry.url];
+            const sub = document.createElement("p");
+            sub.className = "muted";
+            sub.textContent = [
+              isCurrent && resuming ? "Up next" : entry.is_read ? "Read" : "",
+              entry.publisher,
+              mins ? `~${formatDuration(mins)}` : "",
+            ].filter(Boolean).join(" · ");
+            copy.append(titleBtn, sub);
+
+            const controls = document.createElement("div");
+            controls.className = "gym-queue-controls";
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.textContent = "×";
+            remove.setAttribute("aria-label", `Remove ${entry.title} from queue`);
+            remove.onclick = () => updateServerQueue(urls.filter((u) => u !== entry.url));
+            controls.append(remove);
+
+            li.append(num, copy, controls);
+            return li;
+          }),
+        );
+      }
+    }
+  }
+
+  // 4. Filtered reading suggestions (keeping queued items visible and clearly badged)
+  const queuedSet = new Set(qItems.map((i) => i.url));
+
+  $("gym-active-filter").hidden = !gymFilter;
+  if (gymFilter) {
+    $("gym-active-filter-text").textContent = `Focused on: ${gymFilter.label}`;
+  }
+
+  let pool = state.articles.filter((a) => !a.is_read && a.triage !== "skip");
+  if (gymFilter) pool = pool.filter((a) => gymFilter.urls.has(a.url));
+  pool = pool.filter((a) => {
+    const mins = minutesMap[a.url] || 5;
+    const isMedia = ["audio", "video"].includes(a.content_format) || a.url.startsWith("https://www.youtube.com/watch?v=");
+    if (gymEffort === "quick") return !isMedia && mins <= 10;
+    if (gymEffort === "deep") return !isMedia && mins >= 15;
+    if (gymEffort === "media") return isMedia;
+    return true;
+  });
+  pool.sort((a, b) => {
+    const score = (art) => (art.kev_cves?.length ? 2 : 0) + (art.watchlist_hits?.length ? 1 : 0);
+    return score(b) - score(a);
+  });
+  currentPendingTriage = pool;
+
+  if (!pool.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No unread reports match this filter right now. Try All or refresh your sources.";
+    $("gym-exercise-list").replaceChildren(empty);
+  } else {
+    $("gym-exercise-list").replaceChildren(
+      ...pool.slice(0, 8).map((article) => {
+        const row = document.createElement("article");
+        row.className = "gym-exercise-row";
+        const copy = document.createElement("div");
+        const title = document.createElement("button");
+        title.type = "button";
+        title.className = "note-article-link";
+        title.textContent = article.title;
+        title.onclick = () => openStandalone(article.url);
+        const meta = document.createElement("p");
+        meta.className = "muted";
+        const mins = minutesMap[article.url];
+        meta.textContent = `${article.publisher} · ${dateLabel(article.published_at)}` + (mins ? ` · ~${formatDuration(mins)}` : "");
+        const chip = formatChip(article);
+        if (chip) meta.prepend(chip);
+        copy.append(title, meta);
+        if (article.kev_cves?.length || article.watchlist_hits?.length) {
+          const wrap = document.createElement("div");
+          wrap.className = "triage-badges";
+          for (const cve of (article.kev_cves || []).slice(0, 1)) {
+            const b = document.createElement("span");
+            b.className = "kev-badge";
+            b.textContent = `KEV · ${cve}`;
+            wrap.append(b);
+          }
+          for (const hit of (article.watchlist_hits || []).slice(0, 2)) {
+            const b = document.createElement("span");
+            b.className = "watchlist-hit-badge";
+            b.textContent = hit;
+            wrap.append(b);
+          }
+          copy.append(wrap);
+        }
+        const actions = document.createElement("div");
+        actions.className = "gym-exercise-actions";
+        const readBtn = document.createElement("button");
+        readBtn.type = "button";
+        readBtn.textContent = "Read";
+        readBtn.onclick = () => openStandalone(article.url);
+        const inQueue = queuedSet.has(article.url);
+        const queueFull = queuedSet.size >= MAX_QUEUE_ITEMS;
+        const setBtn = document.createElement("button");
+        setBtn.type = "button";
+        setBtn.textContent = inQueue ? "Queued ✓" : "+ Queue";
+        setBtn.classList.toggle("is-added", inQueue);
+        setBtn.disabled = !inQueue && queueFull;
+        setBtn.title = !inQueue && queueFull ? `Queue is full (${MAX_QUEUE_ITEMS} articles max)` : "";
+        setBtn.onclick = () => toggleQueueArticle(article);
+        const dismissBtn = document.createElement("button");
+        dismissBtn.type = "button";
+        dismissBtn.className = "gym-dismiss-btn";
+        dismissBtn.textContent = "×";
+        dismissBtn.title = "Dismiss from suggestions";
+        dismissBtn.setAttribute("aria-label", `Dismiss ${article.title}`);
+        dismissBtn.onclick = async () => {
+          await decideTriage([article.url], "skip");
+          renderGym();
+        };
+        actions.append(readBtn, setBtn, dismissBtn);
+        row.append(copy, actions);
+        return row;
+      }),
+    );
+  }
+
+  // 5. Right column: Open questions & topics + Recent takeaways
+  const topics = gymData.topics || [];
+  $("gym-topics-section").hidden = !topics.length;
+  $("gym-topics-list").replaceChildren(
+    ...topics.map((topic) => {
+      const card = document.createElement("a");
+      card.className = "gym-topic-item";
+      card.href = "/topic?" + new URLSearchParams({ id: topic.id });
+      const head = document.createElement("strong");
+      head.textContent = topic.name;
+      const meta = document.createElement("span");
+      meta.className = "muted";
+      const bits = [`${topic.articles} ${topic.articles === 1 ? "article" : "articles"}`];
+      if (topic.open_questions) bits.push(`${topic.open_questions} open ${topic.open_questions === 1 ? "question" : "questions"}`);
+      meta.textContent = bits.join(" · ");
+      card.append(head, meta);
+      for (const qText of topic.questions || []) {
+        const qLine = document.createElement("p");
+        qLine.className = "gym-question-quote";
+        qLine.textContent = qText;
+        card.append(qLine);
+      }
+      return card;
+    }),
+  );
+
+  const takeaways = gymData.takeaways || [];
+  if (!takeaways.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "Jot down a takeaway or highlight while reading — your insights will appear here for recall.";
+    $("gym-takeaways-list").replaceChildren(empty);
+  } else {
+    $("gym-takeaways-list").replaceChildren(
+      ...takeaways.map((item) => {
+        const card = document.createElement("article");
+        card.className = "gym-takeaway-card";
+        const quote = document.createElement("p");
+        quote.className = "gym-takeaway-text";
+        quote.textContent = item.snippet;
+        const source = document.createElement("button");
+        source.type = "button";
+        source.className = "gym-takeaway-source";
+        source.textContent = `${item.title} · ${item.publisher}`;
+        source.onclick = () => openStandalone(item.url);
+        card.append(quote, source);
+        return card;
+      }),
+    );
+  }
+}
+
+document.querySelectorAll("[data-gym-effort]").forEach((button) => {
+  button.addEventListener("click", () => {
+    gymEffort = button.dataset.gymEffort;
+    document.querySelectorAll("[data-gym-effort]").forEach((b) =>
+      b.setAttribute("aria-pressed", String(b.dataset.gymEffort === gymEffort)),
+    );
+    renderGym();
+  });
+});
+$("gym-clear-filter")?.addEventListener("click", () => {
+  gymFilter = null;
+  renderGym();
+});
+$("gym-clear-queue")?.addEventListener("click", () => updateServerQueue([]));
+$("gym-queue-toggle")?.addEventListener("click", () => {
+  homeQueueExpanded = !homeQueueExpanded;
+  renderGym();
+});
+$("gym-refresh")?.addEventListener("click", async () => {
+  const button = $("gym-refresh"),
+    status = $("gym-refresh-status");
+  button.disabled = true;
+  status.hidden = false;
+  status.textContent = "Checking your sources for new research…";
+  notice("");
+  try {
+    const report = await runBackgroundJob("/api/jobs/discover", { days: 30 }),
+      added = report.sources.reduce((total, source) => total + source.inserted, 0);
+    state = await api("/api/state");
+    await loadAndRenderGym();
+    status.textContent = added
+      ? `${added} new ${added === 1 ? "report" : "reports"} added.`
+      : "Up to date — no new reports right now.";
+    if (report.errors.length || report.paused.length) notice([...report.errors, ...report.paused].join(" · "));
+  } catch (error) {
+    status.textContent = "Couldn't refresh sources right now.";
+    notice(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+let triageUndo = null,
+  currentPendingTriage = [];
 function openStandalone(url) {
   standaloneURL = url;
   return renderQueue().catch((error) => notice(error.message));
@@ -283,123 +705,58 @@ async function decideTriage(urls, decision, undoable = true) {
   for (const article of state.articles)
     if (urls.includes(article.url)) article.triage = decision;
   triageUndo = undoable && decision ? urls : null;
-  renderTriage();
+  renderGym();
 }
-function renderTriage() {
-  // Temporary sessions only hold what was just supplied, so there's nothing to sort.
-  const temporary = isTemporarySession(),
-    queued = new Set(
-      state.queue && !state.queue.finished ? state.queue.items.map((item) => item.url) : [],
-    ),
-    pending = temporary
-      ? []
-      : state.articles.filter(
-          (a) => !a.is_read && !a.triage && !a.has_notes && !queued.has(a.url),
-        ),
-    kept = temporary
-      ? []
-      : state.articles.filter((a) => a.triage === "keep" && !a.is_read && !queued.has(a.url));
-  if (state.week) {
-    $("home-week").hidden = false;
-    $("home-week").textContent = `Last 7 days: ${state.week.saved} saved · ${state.week.read} read`;
-  }
-  $("home-kept").hidden = !kept.length;
-  $("kept-count").textContent = `· ${kept.length}`;
-  $("kept-titles").textContent =
-    kept.slice(0, 3).map((a) => a.title).join(" · ") +
-    (kept.length > 3 ? ` · and ${kept.length - 3} more` : "");
-  $("kept-warning").hidden = !queued.size;
-  $("kept-start").onclick = async () => {
-    $("kept-start").disabled = true;
-    try {
-      standaloneURL = null;
-      state.queue = await api("/api/queue", { urls: kept.slice(0, 20).map((a) => a.url) });
-      await renderQueue();
-    } catch (error) {
-      notice(error.message);
-    } finally {
-      $("kept-start").disabled = false;
-    }
-  };
-  $("home-triage").hidden = !pending.length && !triageUndo;
-  $("triage-count").textContent = `· ${pending.length}`;
-  $("triage-undo").hidden = !triageUndo;
-  $("triage-undo").onclick = () => decideTriage(triageUndo, null, false);
-  const cutoff = Date.now() - 30 * 86400000,
-    old = pending.filter((a) => new Date(a.published_at).getTime() < cutoff);
-  $("triage-old").hidden = !old.length;
-  $("triage-old").textContent = `Skip ${old.length} older than 30 days`;
-  $("triage-old").onclick = () => decideTriage(old.map((a) => a.url), "skip");
-  $("triage-list").replaceChildren(
-    ...pending.slice(0, 5).map((article) => {
-      const row = document.createElement("article"),
-        copy = document.createElement("div"),
-        title = document.createElement("button"),
-        meta = document.createElement("p"),
-        actions = document.createElement("div"),
-        keep = document.createElement("button"),
-        skip = document.createElement("button");
-      row.className = "triage-row";
-      title.className = "note-article-link";
-      title.textContent = article.title;
-      title.onclick = () => openStandalone(article.url);
-      meta.className = "muted";
-      meta.textContent = `${article.publisher} · ${dateLabel(article.published_at)}`;
-      const chip = formatChip(article);
-      if (chip) meta.prepend(chip);
-      copy.append(title, meta);
-      keep.textContent = "Keep";
-      keep.setAttribute("aria-label", "Keep: " + article.title);
-      keep.onclick = () => decideTriage([article.url], "keep");
-      skip.textContent = "Skip";
-      skip.setAttribute("aria-label", "Skip: " + article.title);
-      skip.onclick = () => decideTriage([article.url], "skip");
-      actions.append(keep, skip);
-      row.append(copy, actions);
-      return row;
+function renderWatchlist() {
+  const bar = $("watchlist-bar");
+  if (!bar) return;
+  const temporary = isTemporarySession();
+  bar.hidden = temporary;
+  if (temporary) return;
+  const items = state.watchlists || [];
+  $("watchlist-tags").replaceChildren(
+    ...items.map((item) => {
+      const chip = document.createElement("span");
+      chip.className = "watchlist-chip";
+      chip.textContent = item.term;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", `Stop watching ${item.term}`);
+      remove.onclick = async () => {
+        try {
+          await api("/api/watchlist-delete", { id: item.id });
+          state = await api("/api/state");
+          renderWatchlist();
+          renderGym();
+        } catch (error) {
+          notice(error.message);
+        }
+      };
+      chip.append(remove);
+      return chip;
     }),
   );
 }
-$("home-build").onclick = () => renderSetup();
-// Temporary sessions only hold what was supplied, so there are no sources to check.
-$("home-find").hidden = isTemporarySession();
-// A new tab, so leaving to look at sources doesn't lose the result of the check.
-function sourcesLink(text) {
-  const link = document.createElement("a");
-  link.href = "/sources";
-  link.target = "_blank";
-  link.rel = "noopener";
-  link.textContent = text;
-  return link;
-}
-$("home-find").onclick = async () => {
-  const button = $("home-find"),
-    status = $("home-find-status");
-  button.disabled = true;
-  status.hidden = false;
-  status.replaceChildren("Checking your ", sourcesLink("sources"), " for the last 30 days. This can take a minute.");
-  notice("");
+$("watchlist-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = $("watchlist-input");
+  const term = input.value.trim();
+  if (!term) return;
+  input.disabled = true;
   try {
-    const report = await runBackgroundJob("/api/jobs/discover", { days: 30 }),
-      added = report.sources.reduce((total, source) => total + source.inserted, 0);
+    await api("/api/watchlists", { term });
+    input.value = "";
     state = await api("/api/state");
-    if (!$("home").hidden) renderHome();
-    status.replaceChildren(
-      added ? `${added} new ${added === 1 ? "article" : "articles"} added to To triage.` : "No new articles.",
-    );
-    if (report.errors.length) status.append(" Some ", sourcesLink("sources"), " had problems.");
-    if (report.errors.length || report.paused.length) notice([...report.errors, ...report.paused].join(" · "));
+    renderWatchlist();
+    renderGym();
   } catch (error) {
-    status.textContent = "Couldn't check for new articles. Your saved articles are still here.";
     notice(error.message);
   } finally {
-    button.disabled = false;
+    input.disabled = false;
+    input.focus();
   }
-};
-$("resume-reading").onclick = () => {
-  standaloneURL = null;
-  renderQueue().catch((error) => notice(error.message));
-};
+});
 function formatChip(article) {
   if (!article?.format_label) return null;
   const chip = document.createElement("span");
@@ -430,8 +787,8 @@ function styleArticleStatus(meta, article) {
 }
 function addToDraft(url) {
   if (draftQueue.includes(url)) return;
-  if (draftQueue.length >= 100) {
-    notice("Choose up to 100 articles per queue.");
+  if (draftQueue.length >= MAX_QUEUE_ITEMS) {
+    notice(`Choose up to ${MAX_QUEUE_ITEMS} articles per queue.`);
     return;
   }
   draftQueue.push(url);
@@ -442,8 +799,8 @@ function addToDraft(url) {
 function placeDraft(url, beforeURL = null) {
   if (url === beforeURL) return;
   const queued = draftQueue.includes(url);
-  if (!queued && draftQueue.length >= 100) {
-    notice("Choose up to 100 articles per queue.");
+  if (!queued && draftQueue.length >= MAX_QUEUE_ITEMS) {
+    notice(`Choose up to ${MAX_QUEUE_ITEMS} articles per queue.`);
     return;
   }
   if (queued) draftQueue.splice(draftQueue.indexOf(url), 1);
@@ -494,9 +851,9 @@ function renderBuilder() {
   $("add-all").hidden = !addable.length;
   $("add-all").textContent = `Add ${addable.length === articles.length ? "all" : addable.length + " more"} to queue`;
   $("add-all").onclick = () => {
-    const room = 100 - draftQueue.length;
-    if (addable.length > room) notice("A queue can hold up to 100 articles.");
-    draftQueue.push(...addable.slice(0, room).map((a) => a.url));
+    const room = MAX_QUEUE_ITEMS - draftQueue.length;
+    if (addable.length > room) notice(`A queue can hold up to ${MAX_QUEUE_ITEMS} articles.`);
+    draftQueue.push(...addable.slice(0, Math.max(0, room)).map((a) => a.url));
     saveQueueDraft();
     renderBuilder();
   };
@@ -822,13 +1179,57 @@ function renderMedia() {
   });
 }
 
+async function refreshArticleIOCs() {
+  if (!currentArticle) return;
+  const url = currentArticle.url;
+  const refreshed = await api("/api/article?" + new URLSearchParams({ url }));
+  if (currentArticle?.url !== url) return;
+  currentArticle.iocs = refreshed.iocs;
+  const wasOpen = $("iocs-panel").open;
+  renderIOCs();
+  $("iocs-panel").open = wasOpen;
+  loadRelated(currentArticle);
+}
+
 function renderIOCs() {
   renderArticleIOCs(currentArticle, {
     bodyEl: $("article-body"),
     setPhoneView,
     notice,
+    async onIgnore(kind, value, manual) {
+      if (!currentArticle) return;
+      try {
+        await api(
+          manual ? "/api/indicator-remove" : "/api/indicator-ignore",
+          manual ? { url: currentArticle.url, kind, value } : { kind, value },
+        );
+        await refreshArticleIOCs();
+      } catch (error) {
+        notice(error.message);
+      }
+    },
   });
 }
+
+$("ioc-add-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!currentArticle) return;
+  const kind = $("ioc-add-kind").value;
+  const input = $("ioc-add-value");
+  const value = input.value.trim();
+  if (!value) return;
+  input.disabled = true;
+  try {
+    await api("/api/indicator-add", { url: currentArticle.url, kind, value });
+    input.value = "";
+    await refreshArticleIOCs();
+  } catch (error) {
+    notice(error.message);
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+});
 
 async function renderQueue() {
   const q = standaloneURL
@@ -840,15 +1241,21 @@ async function renderQueue() {
       }
     : state.queue;
   if (!q) {
-    renderSetup();
+    if (isTemporarySession()) renderSetup();
+    else renderHome();
     return;
   }
   if (q.finished) {
     currentArticle = null;
     noteModel = null;
-    renderSetup();
+    if (isTemporarySession()) {
+      renderSetup();
+      $("setup").inert = true;
+    } else {
+      renderHome();
+      $("home").inert = true;
+    }
     $("complete").hidden = false;
-    $("setup").inert = true;
     $("new-queue").focus();
     $("completion-count").textContent =
       `${q.read_count} of ${q.items.length} articles marked read. ${q.items.length - q.read_count} remain unread.`;
@@ -907,8 +1314,10 @@ async function renderQueue() {
   window.renderArticleMath?.();
   renderHighlights();
   renderIOCs();
+  renderBacklinks(article);
+  populateArticleCitations(article);
+  resetAIPanel();
   loadRelated(article);
-  loadTags(article);
   loadTopics(article);
   const next = q.items[q.cursor + 1];
   document
@@ -932,6 +1341,11 @@ async function renderQueue() {
     q.cursor === q.items.length - 1 ? "Finish" : "Next";
   $("mark-unread").hidden = !article.is_read;
   show("reader");
+  syncHistory(
+    standaloneURL
+      ? new URLSearchParams({ open: standaloneURL }).toString()
+      : "view=reader",
+  );
   document.dispatchEvent(
     new CustomEvent("reader-article", { detail: article }),
   );
@@ -1040,7 +1454,7 @@ document.querySelectorAll("[data-action]").forEach(
           currentArticle = null;
           noteModel = null;
           armPassage();
-          renderSetup();
+          openQueueBuilder();
           setBusy(false);
           return;
         }
@@ -1243,18 +1657,6 @@ async function loadRelated(article) {
     // The article is still readable without this, including offline and in temporary sessions.
   }
 }
-const tagEditor = mountTagEditor($("tags-editor"), { post: api, onError: notice });
-async function loadTags(article) {
-  $("tags-panel").hidden = true;
-  try {
-    const data = await api("/api/tags?" + new URLSearchParams({ url: article.url }));
-    if (currentArticle !== article) return;
-    tagEditor.show(article.url, data);
-    $("tags-panel").hidden = false;
-  } catch {
-    // Offline and temporary sessions have no tag store, so the panel stays hidden.
-  }
-}
 const topicEditor = mountTopicEditor($("topics-editor"), { post: api, onError: notice });
 async function loadTopics(article) {
   $("topics-panel").hidden = true;
@@ -1304,7 +1706,8 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     $("complete").hidden = true;
     $("setup").inert = false;
-    $("article-type").focus();
+    $("home").inert = false;
+    if (isTemporarySession()) $("article-type")?.focus();
   } else if (event.key === "Tab") {
     event.preventDefault();
     $("new-queue").focus();
@@ -1312,24 +1715,33 @@ document.addEventListener("keydown", (event) => {
 });
 $("new-queue").onclick = async () => {
   try {
-    state = await api("/api/state");
-    renderSetup();
+    $("complete").hidden = true;
+    $("home").inert = false;
+    $("setup").inert = false;
+    if (isTemporarySession()) {
+      state = await api("/api/state");
+      renderSetup();
+    } else {
+      location.assign("/library?panel=queue");
+    }
   } catch (error) {
     notice(error.message);
   }
 };
-// Keeps what you're likely to read next on this device, in case the connection drops.
+// Keeps only active queued articles cached offline without flooding the server on every page load.
 function saveForOffline() {
-  if (!navigator.serviceWorker?.controller || !navigator.onLine || !state) return;
-  const upcoming = [
-    ...(state.queue && !state.queue.finished ? state.queue.items.map((item) => item.url) : []),
-    ...state.articles.filter((a) => a.triage === "keep" && !a.is_read).map((a) => a.url),
-    ...state.articles.filter((a) => !a.is_read && !a.triage).map((a) => a.url),
-  ];
+  if (!navigator.serviceWorker?.controller || !navigator.onLine || !state || !window.caches) return;
+  const upcoming = state.queue && !state.queue.finished ? state.queue.items.map((item) => item.url) : [];
+  if (!upcoming.length) return;
   (async () => {
-    for (const url of [...new Set(upcoming)].slice(0, 30)) {
+    for (const url of [...new Set(upcoming)].slice(0, 10)) {
       if (!navigator.onLine) return;
-      await fetch("/api/article?" + new URLSearchParams({ url })).catch(() => {});
+      const apiPath = "/api/article?" + new URLSearchParams({ url });
+      try {
+        if (await caches.match(apiPath)) continue;
+      } catch {}
+      await fetch(apiPath).catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 400));
     }
   })();
 }
@@ -1565,6 +1977,219 @@ $("confirm-delete").onclick = async () => {
   }
 };
 
+function renderBacklinks(article) {
+  const panel = $("backlinks-panel");
+  if (!panel) return;
+  const links = article?.backlinks || [];
+  panel.hidden = !links.length;
+  $("backlinks-count").textContent = links.length ? `· ${links.length}` : "";
+  $("backlinks-list").replaceChildren(
+    ...links.map((item) => {
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.className = "related-report";
+      a.href = item.href;
+      const title = document.createElement("span");
+      title.className = "related-title";
+      title.textContent = item.title;
+      const meta = document.createElement("span");
+      meta.className = "muted";
+      meta.textContent = item.kind === "topic" ? "Topic notes" : "Article notes";
+      a.append(title, meta);
+      li.append(a);
+      return li;
+    }),
+  );
+}
+
+function populateArticleCitations(article) {
+  const menu = $("article-cite-menu");
+  const list = $("article-cite-list");
+  if (!menu || !list) return;
+  const others = (state?.articles || []).filter((a) => a.url !== article?.url).slice(0, 60);
+  menu.hidden = isTemporarySession() || !others.length;
+  if (menu.hidden) return;
+  list.replaceChildren(
+    ...others.map((item) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      const title = document.createElement("span");
+      title.textContent = item.title;
+      const meta = document.createElement("span");
+      meta.className = "muted";
+      meta.textContent = `${item.publisher} · ${dateLabel(item.published_at)}`;
+      btn.append(title, meta);
+      btn.addEventListener("mousedown", (event) => event.preventDefault());
+      btn.onclick = () => {
+        if (busy) return;
+        const link = document.createElement("a");
+        link.setAttribute("href", "/?" + new URLSearchParams({ open: item.url }));
+        link.textContent = `${item.publisher}, ${dateLabel(item.published_at)}`;
+        focusNotes();
+        document.execCommand("insertHTML", false, link.outerHTML + "&nbsp;");
+        menu.open = false;
+        noteChanged();
+      };
+      return btn;
+    }),
+  );
+}
+
+let aiLastOutput = "";
+let aiResults = {};
+let aiShown = null;
+let aiArticleURL = "";
+const AI_ID_NOTES = { retired: "retired in ATT&CK", unknown: "not an ATT&CK ID" };
+
+function aiWhen(iso) {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "" : dateLabel(iso);
+}
+
+// Shows one saved answer: rendered Markdown, who answered and when, and a check of every ATT&CK ID in it.
+function showAIResult(result) {
+  aiShown = result;
+  aiLastOutput = result?.markdown || "";
+  $("ai-result").hidden = !result;
+  $("ai-status").hidden = true;
+  if (!result) return;
+  $("ai-result-label").textContent = result.label;
+  $("ai-result-info").textContent = `· ${result.model} · ${aiWhen(result.created_at)}`;
+  $("ai-result-question").hidden = result.mode !== "ask";
+  $("ai-result-question").textContent = result.mode === "ask" ? `Q: ${result.question}` : "";
+  // The server renders Markdown with raw HTML turned off, so model output can't inject markup.
+  $("ai-output").innerHTML = result.html;
+  const checks = result.checks || [];
+  const flagged = checks.filter((c) => c.status !== "ok");
+  $("ai-checks").hidden = !checks.length;
+  $("ai-checks").replaceChildren(
+    ...checks.map((check) => {
+      const li = document.createElement("li");
+      li.className = `ai-check ai-check-${check.status}`;
+      const code = document.createElement("code");
+      code.textContent = check.id;
+      li.append(code, ` ${check.status === "ok" ? check.name : AI_ID_NOTES[check.status]}`);
+      return li;
+    }),
+  );
+  if (checks.length) {
+    const head = document.createElement("li");
+    head.className = "ai-checks-head";
+    head.textContent = flagged.length
+      ? `ATT&CK check: ${flagged.length} of ${checks.length} IDs need a look`
+      : `ATT&CK check: all ${checks.length} IDs are real techniques`;
+    $("ai-checks").prepend(head);
+  }
+  document.querySelectorAll("[data-ai-mode]").forEach((b) => {
+    b.classList.toggle("has-result", Boolean(aiResults[b.dataset.aiMode]));
+    b.setAttribute("aria-pressed", String(b.dataset.aiMode === result.mode));
+  });
+}
+
+function resetAIPanel() {
+  aiLastOutput = "";
+  aiResults = {};
+  aiShown = null;
+  if (!$("ai-result")) return;
+  $("ai-status").textContent = "";
+  $("ai-status").hidden = true;
+  $("ai-result").hidden = true;
+  if ($("ai-question")) $("ai-question").value = "";
+  document.querySelectorAll("[data-ai-mode]").forEach((b) => {
+    b.classList.remove("has-result");
+    b.setAttribute("aria-pressed", "false");
+  });
+  loadAIResults();
+}
+
+// Earlier answers for this article come back without another model call.
+async function loadAIResults() {
+  if ($("ai-panel")?.hidden || !currentArticle) return;
+  const url = (aiArticleURL = currentArticle.url);
+  try {
+    const data = await api("/api/ai-results?" + new URLSearchParams({ url }));
+    if (url !== aiArticleURL) return;
+    aiResults = Object.fromEntries((data.results || []).map((r) => [r.mode, r]));
+    if (data.results?.length) showAIResult(data.results[0]);
+  } catch {
+    /* Saved answers are a convenience; the buttons still work without them. */
+  }
+}
+
+async function runAI(mode, question = "") {
+  if (!currentArticle) return;
+  const panel = $("ai-panel");
+  const url = currentArticle.url;
+  panel.querySelectorAll("button, input").forEach((el) => (el.disabled = true));
+  $("ai-status").textContent = aiStatusLocal
+    ? "Asking the local model… a long report can take a minute or two."
+    : "Asking the model…";
+  $("ai-status").hidden = false;
+  try {
+    const result = await api("/api/ai-assist", { url, mode, question });
+    if (url !== currentArticle?.url) return;
+    aiResults[mode] = result;
+    showAIResult(result);
+  } catch (error) {
+    $("ai-status").textContent = error.message;
+  } finally {
+    panel.querySelectorAll("button, input").forEach((el) => (el.disabled = false));
+  }
+}
+
+let aiStatusLocal = false;
+async function initAIAssist() {
+  const panel = $("ai-panel");
+  if (!panel || isTemporarySession()) return;
+  try {
+    const status = await api("/api/ai-status");
+    if (!status?.enabled) return;
+    panel.hidden = false;
+    aiStatusLocal = Boolean(status.local);
+    $("ai-model-label").textContent = `· ${status.model || status.provider}${status.local ? " · local" : " · cloud"}`;
+  } catch {
+    return;
+  }
+  // A saved answer shows instantly; Regenerate asks the model again.
+  panel.querySelectorAll("[data-ai-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const saved = aiResults[button.dataset.aiMode];
+      if (saved) showAIResult(saved);
+      else runAI(button.dataset.aiMode);
+    });
+  });
+  $("ai-ask")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const question = $("ai-question").value.trim();
+    if (!question) {
+      $("ai-status").textContent = "Type a question about this article first.";
+      $("ai-status").hidden = false;
+      return;
+    }
+    runAI("ask", question);
+  });
+  $("ai-regenerate")?.addEventListener("click", () => {
+    if (aiShown) runAI(aiShown.mode, aiShown.question || "");
+  });
+  $("ai-insert")?.addEventListener("click", () => {
+    if (!aiLastOutput || busy) return;
+    insertCallout(aiLastOutput);
+  });
+  loadAIResults();
+}
+
+initShortcuts({
+  onTriageKeep() {
+    if (currentPendingTriage.length) toggleQueueArticle(currentPendingTriage[0]);
+  },
+  onTriageSkip() {
+    if (currentPendingTriage.length) decideTriage([currentPendingTriage[0].url], "skip");
+  },
+  onTriageUndo() {
+    if (triageUndo) decideTriage(triageUndo, null, false);
+  },
+});
+
 // Expose workspace hooks needed by companion classic scripts (notes-editor.js, focus.js, temporary.js).
 Object.defineProperty(window, "busy", { get: () => busy, configurable: true });
 Object.defineProperty(window, "currentArticle", { get: () => currentArticle, configurable: true });
@@ -1572,6 +2197,34 @@ window.notice = notice;
 window.saveNow = saveNow;
 window.focusMinutes = focusMinutes;
 window.readerMetadata = readerMetadata;
+
+window.addEventListener("popstate", async () => {
+  if (isTemporarySession() || !state) return;
+  replayingHistory = true;
+  try {
+    await saveNow().catch(() => {});
+    const params = new URLSearchParams(location.search);
+    const open = params.get("open");
+    const view = params.get("view");
+    if (open) {
+      standaloneURL = open;
+      await renderQueue();
+    } else if (view === "builder") {
+      location.replace("/library?panel=queue");
+      return;
+    } else if (view === "reader") {
+      standaloneURL = null;
+      await renderQueue();
+    } else {
+      standaloneURL = null;
+      renderHome();
+    }
+  } catch (error) {
+    notice(error.message);
+  } finally {
+    replayingHistory = false;
+  }
+});
 
 (async () => {
   try {
@@ -1581,10 +2234,26 @@ window.readerMetadata = readerMetadata;
       location.replace("/save" + pending);
       return;
     }
-    state = await api("/api/state");
-    setTimeout(saveForOffline, 2000);
-    const view = new URLSearchParams(location.search).get("view");
-    const open = new URLSearchParams(location.search).get("open");
+    const initialParams = new URLSearchParams(location.search);
+    const view = initialParams.get("view");
+    const open = initialParams.get("open");
+    if (view === "builder" && !isTemporarySession()) {
+      location.replace("/library?panel=queue");
+      return;
+    }
+    const landingHome = !open && !view && !isTemporarySession();
+    if (landingHome) {
+      const [st, gym] = await Promise.all([
+        api("/api/state"),
+        api("/api/home-gym").catch(() => null),
+      ]);
+      state = st;
+      gymData = gym;
+    } else {
+      state = await api("/api/state");
+    }
+    initAIAssist();
+    setTimeout(saveForOffline, 4000);
     if (open) {
       standaloneURL = open;
       await renderQueue();
@@ -1598,7 +2267,7 @@ window.readerMetadata = readerMetadata;
         }
       } catch {}
       renderSetup();
-    } else renderHome();
+    } else renderHome(true);
   } catch (error) {
     notice(error.message);
   }

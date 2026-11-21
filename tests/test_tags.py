@@ -31,7 +31,7 @@ def test_tags_are_tidied(raw, expected):
     assert clean_tag(raw) == expected
 
 
-@pytest.mark.parametrize('raw', ['', '   ', '#', 'x' * 41, 'a\x00b', None, 5])
+@pytest.mark.parametrize('raw', ['', '   ', '#', 'x' * 81, 'a\x00b', None, 5])
 def test_bad_tags_are_refused(raw):
     with pytest.raises(SessionError):
         clean_tag(raw)
@@ -73,7 +73,7 @@ def test_removing_and_deleting_clean_up(db):
     delete_article(db, second)
     db.commit()
     assert tag_state(db, first)['tags'][0]['others'] == []
-    assert db.execute('SELECT count(*) FROM article_tags WHERE article_url=?', (second,)).fetchone()[0] == 0
+    assert db.execute('SELECT count(*) FROM topic_articles WHERE article_url=?', (second,)).fetchone()[0] == 0
 
 
 def test_articles_from_disabled_sources_are_left_out(db):
@@ -105,8 +105,7 @@ def test_library_links_keep_the_tag_and_active_tag_clears(db):
     page = render_library(db, tag='a b')
     assert 'tag=a+b' in page
     assert 'name="tag" value="a b"' in page
-    assert 'class="lib-tag-option active" aria-current=true href="/library?q=&amp;notes=0&amp;progress=0&amp;tag=&amp;type="' in page
-    assert 'Tag: a b' in page and 'aria-label="Clear tag filter"' in page
+    assert 'Topic: a b' in page and 'aria-label="Clear topic filter"' in page
 
 
 def test_library_rows_show_two_tags_and_a_count(db):
@@ -115,7 +114,7 @@ def test_library_rows_show_two_tags_and_a_count(db):
         add_tag(db, first, name)
     page = render_library(db)
     assert '<span class="lib-row-tags"><span class="lib-row-tag">&lt;b&gt;</span><span class="lib-row-tag">one</span><span>+2</span></span>' in page
-    assert 'id="lib-tag-editor"' in page
+    assert 'id="lib-topic-editor"' in page
 
 
 def test_library_with_no_tags_has_no_tag_menu(db):
@@ -125,9 +124,9 @@ def test_library_with_no_tags_has_no_tag_menu(db):
 
 def test_export_lists_tags(db):
     first = save(db, 'first')
-    assert 'Tags:' not in export_article(db, first)
+    assert 'Topics:' not in export_article(db, first)
     add_tag(db, first, 'apt29')
-    assert 'Tags: apt29\n' in export_article(db, first)
+    assert 'Topics: apt29\n' in export_article(db, first)
 
 
 def test_library_rows_carry_tags_as_json(db):
@@ -135,3 +134,20 @@ def test_library_rows_carry_tags_as_json(db):
 
     add_tag(db, save(db, 'first'), 'apt29')
     assert json.loads(library_rows(db)[0]['tags_json']) == ['apt29']
+
+
+def test_legacy_article_tags_migrate_into_topics(tmp_path):
+    path = tmp_path / 'migrate.sqlite3'
+    db = connect_database(path)
+    first = save(db, 'first')
+    db.execute("INSERT INTO article_tags(article_url, tag, created_at) VALUES (?,?,?)", (first, 'php', '2026-01-01T00:00:00Z'))
+    db.commit()
+    db.close()
+    reopened = connect_database(path)
+    try:
+        assert reopened.execute('SELECT count(*) FROM article_tags').fetchone()[0] == 0
+        names = [r[0] for r in reopened.execute('SELECT name FROM topics').fetchall()]
+        assert names == ['php']
+        assert reopened.execute('SELECT count(*) FROM topic_articles WHERE article_url=?', (first,)).fetchone()[0] == 1
+    finally:
+        reopened.close()

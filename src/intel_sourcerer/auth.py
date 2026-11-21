@@ -164,6 +164,24 @@ class Accounts:
         if session and session.get('token_hash'):
             with self.transaction() as db:db.execute('DELETE FROM sessions WHERE token_hash=?',(session['token_hash'],))
 
+    def active_sessions_count(self, user_id):
+        if not user_id:
+            return 0
+        with self.transaction() as db:
+            db.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
+            return db.execute('SELECT COUNT(*) FROM sessions WHERE user_id=?', (user_id,)).fetchone()[0]
+
+    def revoke_other_sessions(self, session):
+        if not session or not session.get('user_id') or not session.get('token_hash'):
+            return 0
+        with self.transaction() as db:
+            db.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
+            cur = db.execute(
+                'DELETE FROM sessions WHERE user_id=? AND token_hash<>?',
+                (session['user_id'], session['token_hash']),
+            )
+            return cur.rowcount
+
     def record_setup_attempt(self, address):
         key = 'setup:' + str(address)
         with self.transaction() as db:

@@ -237,3 +237,12 @@ def test_a_blocked_page_with_only_a_teaser_in_the_feed_still_pauses(monkeypatch,
     report = run_import(monkeypatch, tmp_path, handler)
     assert any('bot check' in error for error in report['errors'])
     assert state(tmp_path)['paused_until'] is not None
+
+
+def test_feeds_with_spelled_out_dates_still_get_a_date():
+    """CrowdStrike writes pubDate as "Nov 19, 2026 00:00:00-0600", which feedparser can't read on its own."""
+    from intel_sourcerer.feeds import parse_feed
+    rss = (b'<rss version="2.0"><channel><item><title>Java4Shell</title><link>https://example.com/j</link>'
+           b'<pubDate>Nov 19, 2026 00:00:00-0600</pubDate></item></channel></rss>')
+    [article], _ = parse_feed(rss, FeedSource('Vendor', 'https://example.com/rss'))
+    assert article.published_at == datetime(2026, 11, 19, 6, tzinfo=timezone.utc)

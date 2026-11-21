@@ -4,12 +4,21 @@
 </p>
 <h2>${title}</h2>
 ${details}
-<div id="lib-tag-editor" class="tag-editor" data-url="${url}"></div>
+<div id="lib-topic-editor" class="tag-editor" data-url="${url}"></div>
 <div class="lib-note-content">${notes}</div>
 <p class="lib-edited">${edited}</p>
 <div class="lib-actions">
   <a class="lib-open" href="${opened}">Open in reader</a>
+  <button type="button" class="lib-detail-queue" data-queue-url="${url}" data-queue-title="${title}" data-queue-publisher="${publisher}" data-queue-minutes="${minutes}" aria-pressed="false">+ Queue</button>
   <a class="lib-export" href="${exported}" download="article-notes.md">Export notes</a>
+  <details class="export-menu">
+    <summary>IOCs ▾</summary>
+    <div class="export-menu-list">
+      <a href="${exported_csv}">CSV</a>
+      <a href="${exported_stix}">STIX 2.1</a>
+      <a href="${exported_nav}">ATT&amp;CK Navigator</a>
+    </div>
+  </details>
 </div>
 <div class="lib-manage">
   <button class="lib-rename" type="button" data-url="${url}">Rename</button>

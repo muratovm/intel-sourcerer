@@ -1,7 +1,7 @@
 "use strict";
 // One quiet line of names with a box at the end, used for tags and for topics.
 function mountTokenEditor(box, options) {
-  const { id, label: labelText, placeholder, maxLength, post, onError, onChange, read, fileOnComma, newHint } = options;
+  const { id, label: labelText, placeholder, maxLength, post, onError, onChange, read, fileOnComma, commitOnBlur, newHint } = options;
   const label = document.createElement("label"),
     input = document.createElement("input"),
     add = document.createElement("button"),
@@ -134,7 +134,7 @@ function mountTokenEditor(box, options) {
   });
   // A stray tag is harmless, but clicking away shouldn't start a topic nobody asked for.
   input.addEventListener("blur", () => {
-    if (fileOnComma) fileInput();
+    if (commitOnBlur) fileInput();
     if (!input.value.trim()) closeInput();
   });
   return {
@@ -153,6 +153,7 @@ function mountTagEditor(box, { post, onError, onChange }) {
     placeholder: "Add tags, separated by commas",
     maxLength: 400,
     fileOnComma: true,
+    commitOnBlur: true,
     post,
     onError,
     onChange,
@@ -174,15 +175,18 @@ function mountTagEditor(box, { post, onError, onChange }) {
   });
 }
 
-function mountTopicEditor(box, { post, onError }) {
+function mountTopicEditor(box, { post, onError, onChange } = {}) {
   return mountTokenEditor(box, {
     id: "topic-input",
     label: "Topics",
-    placeholder: "Add to a topic",
-    maxLength: 80,
+    placeholder: "Add topics, separated by commas",
+    maxLength: 240,
+    fileOnComma: true,
+    commitOnBlur: false,
     newHint: "Enter to create",
     post,
     onError,
+    onChange,
     add: (name) => ["/api/topic-article", { name }],
     read: (data) => ({
       items: data.topics.map((topic) => ({

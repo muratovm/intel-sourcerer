@@ -26,6 +26,15 @@
               <option value="tracking" ${tracking_selected}>Tracking</option>
               <option value="closed" ${closed_selected}>Closed</option>
             </select>
+            <details class="export-menu">
+              <summary>Export</summary>
+              <div class="export-menu-list">
+                <a href="/export-topic?id=${id}&amp;format=markdown">Markdown dossier</a>
+                <a href="/export-topic?id=${id}&amp;format=navigator">ATT&amp;CK Navigator (.json)</a>
+                <a href="/export-topic?id=${id}&amp;format=csv">Indicators (.csv)</a>
+                <a href="/export-topic?id=${id}&amp;format=stix">STIX 2.1 bundle (.json)</a>
+              </div>
+            </details>
             <button id="rename-topic" type="button">Rename</button>
             <button id="delete-topic" type="button">Delete</button>
             <button id="read-unread" type="button" class="primary" data-urls="${unread_urls}" ${read_hidden}>${read_label}</button>
@@ -36,7 +45,12 @@
         <div class="topic-columns">
           <section class="topic-articles" aria-label="Articles in this topic">
             <div class="topic-section-head">
-              <h2>Articles</h2>
+              <div class="topic-section-title">
+                <h2>Articles</h2>
+                <div class="topic-list-controls" role="group" aria-label="Sort topic articles">
+                  <button id="topic-sort-toggle" type="button" data-sort="asc">Oldest first ⇅</button>
+                </div>
+              </div>
               <form id="add-article-form" class="topic-add">
                 <label class="sr-only" for="add-article">Add an article from your Library or paste a URL</label>
                 <input id="add-article" type="text" list="library-articles" placeholder="Add from Library or paste a URL" autocomplete="off" />
@@ -72,7 +86,15 @@
                   <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true"><rect x="2.5" y="3" width="13" height="12" rx="2" /><path d="M2.5 7h13M2.5 11h13M9 7v8" /></svg></button
                 ><button type="button" data-format="checklist" aria-label="Checklist" title="Checklist">
                   <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true"><rect x="2.5" y="2.5" width="13" height="13" rx="2.5" /><path d="M5.8 9.2l2.3 2.3 4.2-4.8" /></svg></button
-                ><details id="cite-menu" class="cite-menu" ${cite_hidden}>
+                ><details class="cite-menu template-menu">
+                  <summary>Templates</summary>
+                  <div class="cite-list">
+                    <button type="button" data-template="study"><span>Study synthesis</span><span class="muted">Core concepts, open questions &amp; takeaways</span></button>
+                    <button type="button" data-template="bluf"><span>BLUF / Impact / Detection</span><span class="muted">Executive briefing structure</span></button>
+                    <button type="button" data-template="diamond"><span>Diamond Model</span><span class="muted">Adversary, capability, infra, victim</span></button>
+                    <button type="button" data-template="detection"><span>Detection checklist</span><span class="muted">Process, network &amp; persistence hunts</span></button>
+                  </div>
+                </details><details id="cite-menu" class="cite-menu" ${cite_hidden}>
                   <summary>Cite an article</summary>
                   <div class="cite-list">${cite_buttons}</div>
                 </details>

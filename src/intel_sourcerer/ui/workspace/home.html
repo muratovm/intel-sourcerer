@@ -1,54 +1,96 @@
     <main id="home" class="home-page" hidden>
       <!-- header: / -->
       <div class="home-content">
-        <div class="home-columns">
-          <section class="home-session">
-            <p class="eyebrow">CURRENT READING SESSION</p>
-            <h1>Pick up where you left off</h1>
-            <div id="home-current"></div>
-            <p id="home-progress-text" class="muted"></p>
-            <progress
-              id="home-progress"
-              class="queue-progress"
-              max="1"
-              value="0"
-            ></progress
-            ><button id="resume-reading" class="primary">Resume reading</button>
-          </section>
-          <aside class="home-fresh">
-            <h2>Start a fresh session</h2>
-            <p class="muted">
-              Build a focused reading queue from the latest cybersecurity
-              research and intelligence.
-            </p>
-            <div class="home-actions">
-              <button id="home-find" type="button">Find new articles</button
-              ><button id="home-build">Build a new queue</button>
+        <div id="home-gym-view" class="home-gym">
+          <section class="gym-rhythm" aria-label="Reading activity">
+            <div class="gym-rhythm-left">
+              <div id="gym-heatmap" class="gym-heatmap" aria-label="Last 8 weeks of reading activity"></div>
+              <div class="gym-pulse-text">
+                <strong id="gym-week-summary"></strong>
+                <p id="gym-month-summary" class="muted"></p>
+              </div>
             </div>
-            <p id="home-find-status" class="muted" role="status" hidden></p>
-            <p id="home-library-count" class="muted"></p>
-            <p id="home-in-progress" hidden><a href="/library?progress=1"></a></p>
-            <p id="home-week" class="muted" hidden></p>
-            <p><a href="/save">Set up one-click saving</a></p>
-          </aside>
-        </div>
-        <section id="home-kept" class="home-kept" hidden>
-          <h2>Kept to read <span id="kept-count" class="muted"></span></h2>
-          <p id="kept-titles" class="muted"></p>
-          <button id="kept-start" class="primary" type="button">Start a session with these</button>
-          <p id="kept-warning" class="muted" hidden>This replaces your current queue.</p>
-        </section>
-        <section id="home-triage" class="home-triage" hidden>
-          <div class="home-triage-heading">
-            <h2>To triage <span id="triage-count" class="muted"></span></h2>
-            <button id="triage-undo" type="button" hidden>Undo</button>
+            <div class="gym-rhythm-actions">
+              <button id="gym-refresh" type="button">Refresh sources</button>
+              <a id="gym-build" class="gym-action-link" href="/library?panel=queue">Custom queue</a>
+            </div>
+          </section>
+          <p id="gym-refresh-status" class="muted gym-status" role="status" hidden></p>
+
+          <section class="gym-landscape" aria-label="Current threat research focus">
+            <div class="gym-section-head">
+              <h2>What threat research is focusing on</h2>
+              <span id="gym-window-label" class="muted"></span>
+            </div>
+            <div id="gym-themes" class="gym-themes"></div>
+            <div id="gym-recurring" class="gym-recurring" hidden>
+              <span class="muted">Recurring across labs:</span>
+              <div id="gym-recurring-list" class="gym-recurring-list"></div>
+            </div>
+          </section>
+
+          <div class="gym-workspace">
+            <section class="gym-exercises" aria-label="Choose what to read">
+              <div id="gym-continue" class="gym-continue" hidden>
+                <div class="gym-continue-top">
+                  <div>
+                    <p id="gym-continue-eyebrow" class="eyebrow">YOUR READING QUEUE</p>
+                    <h3 id="gym-continue-title"></h3>
+                    <p id="gym-continue-meta" class="muted"></p>
+                    <div id="gym-queue-progress" class="gym-queue-progress" role="img"></div>
+                  </div>
+                  <div class="gym-continue-actions">
+                    <button id="gym-clear-queue" type="button">Clear</button>
+                    <a href="/library?panel=queue" class="gym-edit-queue-link">Edit in Library</a>
+                    <button id="gym-continue-btn" type="button" class="primary">Resume →</button>
+                  </div>
+                </div>
+                <button id="gym-queue-toggle" class="gym-queue-toggle" type="button" aria-expanded="false" aria-controls="gym-queue-list">
+                  <span class="gym-queue-toggle-label">Show the articles in this queue</span>
+                  <span class="gym-queue-toggle-hint"></span>
+                  <span class="gym-queue-chevron" aria-hidden="true">▾</span>
+                </button>
+                <ol id="gym-queue-list" class="gym-queue-list" hidden></ol>
+              </div>
+
+              <div class="gym-exercise-head">
+                <h2>Pick what to read</h2>
+                <div class="gym-effort-tabs" role="group" aria-label="Filter by reading time">
+                  <button type="button" data-gym-effort="all" aria-pressed="true">All</button>
+                  <button type="button" data-gym-effort="quick" aria-pressed="false">Quick &lt;10m</button>
+                  <button type="button" data-gym-effort="deep" aria-pressed="false">Deep 15m+</button>
+                  <button type="button" data-gym-effort="media" aria-pressed="false">Talks &amp; Audio</button>
+                </div>
+              </div>
+              <div id="gym-active-filter" class="gym-active-filter" hidden>
+                <span id="gym-active-filter-text"></span>
+                <button id="gym-clear-filter" type="button">Clear</button>
+              </div>
+              <div id="gym-exercise-list" class="gym-exercise-list"></div>
+            </section>
+
+            <aside class="gym-log" aria-label="Notes and topics">
+              <section id="gym-topics-section" class="gym-log-block" hidden>
+                <h2>Open questions &amp; topics</h2>
+                <div id="gym-topics-list" class="gym-topics-list"></div>
+              </section>
+              <section id="gym-takeaways-section" class="gym-log-block">
+                <h2>Recent takeaways</h2>
+                <div id="gym-takeaways-list" class="gym-takeaways-list"></div>
+              </section>
+              <section id="watchlist-bar" class="gym-log-block gym-watchlist-block" hidden>
+                <h2>Watchlist</h2>
+                <div id="watchlist-tags" class="watchlist-tags"></div>
+                <form id="watchlist-form" class="watchlist-form">
+                  <label class="sr-only" for="watchlist-input">Add watched vendor, product, actor, or CVE</label>
+                  <input id="watchlist-input" type="text" maxlength="80" placeholder="+ Watch vendor, CVE, actor…" />
+                </form>
+              </section>
+              <p class="gym-log-links muted">
+                <a href="/save">One-click saving</a> · <a href="/account">Full yearly stats</a> · <a href="/indicators">Indicator index</a>
+              </p>
+            </aside>
           </div>
-          <div id="triage-list"></div>
-          <button id="triage-old" type="button" hidden></button>
-        </section>
-        <section class="home-notes">
-          <h2>Recent notes</h2>
-          <div id="recent-notes"></div>
-        </section>
+        </div>
       </div>
     </main>

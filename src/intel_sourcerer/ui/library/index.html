@@ -48,24 +48,65 @@
           type="hidden"
           name="notes"
           value="${notes_filter}"
-        /><input type="hidden" name="progress" value="${progress_filter}" /><input type="hidden" name="tag" value="${tag}" /><input type="hidden" name="type" value="${kind}" /><button class="sr-only" type="submit">Search</button>
+        /><input type="hidden" name="progress" value="${progress_filter}" /><input type="hidden" name="unread" value="${unread_filter}" /><input type="hidden" name="tag" value="${tag}" /><input type="hidden" name="type" value="${kind}" /><input type="hidden" name="source" value="${source}" /><input type="hidden" name="topic" value="${topic}" /><input type="hidden" name="days" value="${days}" /><button class="sr-only" type="submit">Search</button>
       </form>
       <nav class="lib-tabs" aria-label="Library filters">
         <a class="${all_tab_class}" href="${all_link}"
-          >All articles</a
+          >All</a
+        ><a class="${unread_tab_class}" href="${unread_link}"
+          >Unread <span class="lib-tab-count">${unread_count}</span></a
         ><a class="${progress_tab_class}" href="${progress_link}"
           >In progress <span class="lib-tab-count">${progress_count}</span></a
         ><a class="${notes_tab_class}" href="${notes_link}"
-          >With notes</a
-        >${tag_filter}${kind_filter}
+          >Noted</a
+        ><details class="lib-more-filters${filters_active_class}">
+          <summary>${filters_label}</summary>
+          <div class="lib-more-popover">
+            ${source_filter}${topic_filter}${days_filter}${tag_filter}${kind_filter}
+          </div>
+        </details>
       </nav>
       </div>
+      ${active_chips}
       <div class="lib-workspace">
-        <section class="lib-list" aria-label="Saved articles">
-          ${article_rows}${pagination}
+        <section class="lib-list-col" aria-label="Saved articles">
+          <div class="lib-list">
+            <div id="lib-panel-queue" class="lib-queue-section" hidden>
+              <div class="lib-queue-top">
+                <div class="lib-queue-head">
+                  <h2>Reading queue <span id="lib-queue-count" class="lib-queue-badge">0/10</span></h2>
+                  <p id="lib-queue-meta" class="muted"></p>
+                </div>
+                <div id="lib-queue-actions" class="lib-queue-actions">
+                  <button id="lib-start-queue" type="button" class="primary">Start reading</button>
+                  <button id="lib-save-topic-open" type="button">Save as topic</button>
+                  <button id="lib-clear-queue-top" type="button" class="lib-queue-clear">Clear</button>
+                </div>
+              </div>
+              <form id="lib-save-topic-form" class="lib-queue-topic-form" hidden>
+                <label class="sr-only" for="lib-save-topic-name">Topic name</label>
+                <input id="lib-save-topic-name" type="text" list="lib-topic-names" maxlength="80" placeholder="Name this topic, or pick one to add to" autocomplete="off" required />
+                <datalist id="lib-topic-names"></datalist>
+                <button type="submit">Save</button>
+              </form>
+              <p id="lib-save-topic-status" class="muted" role="status" aria-live="polite" hidden>
+                <span></span> <a id="lib-save-topic-link"></a>
+              </p>
+              <ol id="lib-queue-list" class="lib-queue-list"></ol>
+            </div>
+            <div class="lib-list-head">
+              <p class="muted lib-list-count">${match_count_label}</p>
+              <div class="lib-list-head-actions">
+                <button id="lib-queue-visible" type="button" class="lib-queue-visible">+ Queue next</button>
+              </div>
+            </div>
+            ${article_rows}${pagination}
+          </div>
         </section>
         <section id="lib-details" class="lib-detail" aria-label="Notes preview">
-          ${detail}
+          <div id="lib-panel-details" class="lib-panel-details">
+            ${detail}
+          </div>
         </section>
       </div>
     </main>

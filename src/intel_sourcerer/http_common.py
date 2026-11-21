@@ -17,9 +17,11 @@ SHARED_STATIC_FILES = {
     "/workspace/highlights.js": ("workspace/highlights.js", "text/javascript; charset=utf-8"),
     "/workspace/iocs.js": ("workspace/iocs.js", "text/javascript; charset=utf-8"),
     "/workspace/panes.js": ("workspace/panes.js", "text/javascript; charset=utf-8"),
+    "/workspace/shortcuts.js": ("workspace/shortcuts.js", "text/javascript; charset=utf-8"),
     "/focus.js": ("workspace/focus.js", "text/javascript; charset=utf-8"),
     "/math.js": ("workspace/math.js", "text/javascript; charset=utf-8"),
     "/library.js": ("library/library.js", "text/javascript; charset=utf-8"),
+    "/indicators.js": ("indicators/indicators.js", "text/javascript; charset=utf-8"),
     "/notes-editor.js": ("shared/notes-editor.js", "text/javascript; charset=utf-8"),
     "/tag-editor.js": ("shared/tag-editor.js", "text/javascript; charset=utf-8"),
     "/topics.js": ("topics/topics.js", "text/javascript; charset=utf-8"),
@@ -63,9 +65,9 @@ def build_csp(*, include_pwa=True, ancestors=None):
     )
 
 
-def send_security_headers(handler, *, csp, over_https=False):
+def send_security_headers(handler, *, csp, over_https=False, cache_control="no-store"):
     """Apply standard security headers to a BaseHTTPRequestHandler response."""
-    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Cache-Control", cache_control)
     handler.send_header("Content-Security-Policy", csp)
     handler.send_header("X-Content-Type-Options", "nosniff")
     handler.send_header("Referrer-Policy", REFERRER_POLICY)

@@ -192,22 +192,22 @@ The **Library** lists every tag with its count. Select one to see only those art
 
 The reader's **IOCs** panel lists what it finds in the article text, each group with **Copy all**, and selecting a value jumps to it in the article:
 
-- **CVEs**, normalized to uppercase.
-- **MITRE IDs** with their names: ATT&CK techniques, sub-techniques, and tactics (Enterprise, Mobile, ICS) and ATLAS. Retired IDs are marked. IDs that exist only in a link to an ATT&CK or CVE page count too.
-- **File hashes:** MD5, SHA-1, SHA-256, and SHA-512.
-- **File names**, including defanged ones and names inside paths. Everyday tools such as `cmd.exe` sit in their own group, so Copy all gives you just the samples.
+- **CVEs**, normalized to uppercase, with offline **CISA KEV** (Known Exploited Vulnerabilities) badges.
+- **MITRE IDs** with their names: ATT&CK techniques, sub-techniques, tactics, Groups (`G0xxx`), and Software (`S0xxx`) (Enterprise, Mobile, ICS) and ATLAS. Retired IDs are marked. IDs that exist only in a link to an ATT&CK or CVE page count too.
+- **Network & host indicators:** defanged/fanged IPv4 addresses, non-common domains, defanged URLs, Windows registry keys, file hashes (MD5, SHA-1, SHA-256, SHA-512), and file names (with everyday tools grouped separately).
 
-Markdown exports include an Indicators section. Everything is found by pattern with no network lookups, so check values in context: a mention isn't a finding, and a hash-shaped value may not be a file hash. Copy all copies IDs without names.
+Open **Indicators** (`/indicators`) for a cross-library IOC search and pivot index. Per-indicator external lookups (NVD, ATT&CK, VirusTotal, Shodan, GreyNoise, MalwareBazaar) only open when clicked — the app never makes automatic enrichment calls. Articles and Topics export as **Markdown dossiers**, **MITRE ATT&CK Navigator** JSON layers, **CSV**, **JSON**, and **STIX 2.1** bundles.
 
-**Topics** group articles on one subject, such as an exploit or campaign, and hold notes about the whole group. Add an article from the Topics panel while reading, or from the topic page by searching your Library or pasting a URL. A topic lists its articles oldest first, so you can follow how the story developed, and shows the indicators across them with how many articles mention each. "Might belong here" suggests Library articles that share an indicator, using the same rules as Related reports. **Cite an article** links a note to its source; deleting that article keeps the text and removes the link. Dismiss a suggestion and it stays gone for that topic. The Topics page lists what's waiting on each topic, and beside the list shows statistics across tracked topics: reports per week, the busiest topics, indicators found in more than one topic (hashes, CVEs and file names, not techniques), and topics resting on one publisher. Deleting a topic keeps its articles. In the Queue builder, **Save as topic** keeps the list you've built under a name, and the Topic filter pulls a topic's articles into a queue, including older ones outside the chosen timeframe. Tags stay separate: they're quick labels, while a topic is a collection you keep notes on and can close.
+Home triage supports **Watchlists** (watched vendors, products, actors, or CVEs that bubble matching articles to the top), same-CVE clustering with one-click Topic creation, and keyboard shortcuts (press `?` in the workspace). On **Sources** (`/sources`), you can view per-source health, run single-source checks, and add or remove custom RSS/Atom feeds. Set `INTEL_AUTO_REFRESH_HOURS=6` for optional background collection.
 
-**Related reports** links articles in your library that share indicators. A report is listed when it shares a hash, CVE, or file name, or at least three ATT&CK techniques. Reports from other publishers come first, since they corroborate rather than repeat, then the strongest evidence. Each value in the IOCs panel also shows how many other reports mention it (for example `+3`), and selecting that lists them. Everyday tools are left out of matching. A shared value means two reports mention the same thing, not that they describe the same activity, and newsletters that repeat a table will link to each other. The index lives in your database, is built the first time you open an article, and updates itself when articles change.
-
-The names come from a bundled lookup that doesn't update itself. After MITRE publishes a new version, rebuild it and restart the server:
+To refresh the offline MITRE ATT&CK and CISA KEV lookups, run and restart the server:
 
 ```sh
 uv run --with pyyaml python -m intel_sourcerer.update_attack_names
+uv run python -m intel_sourcerer.update_kev
 ```
+
+Optional opt-in **AI Assist** (BLUF summaries, implied TTPs, starter Sigma/KQL hunts) stays hidden until configured via environment variables — either an OpenAI-compatible endpoint such as local Ollama (`INTEL_AI_URL=http://127.0.0.1:11434/v1 INTEL_AI_MODEL=llama3.1`) or OpenAI (`OPENAI_API_KEY`), or Anthropic (`ANTHROPIC_API_KEY`).
 
 MITRE ATT&CK and ATLAS are © The MITRE Corporation. ATT&CK® is a registered trademark of The MITRE Corporation. This project isn't affiliated with or endorsed by MITRE.
 

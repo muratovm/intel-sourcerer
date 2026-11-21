@@ -1,10 +1,21 @@
 """JSON API read and transactional mutation dispatch extracted from web.py."""
 
 from dataclasses import asdict
-from html import escape
+from html import escape, unescape
+import re
 from urllib.parse import parse_qs
 
 from bs4 import BeautifulSoup
+
+TAG_STRIP = re.compile(r"<[^>]+>")
+
+
+def _fast_note_preview(notes, notes_format):
+    if not notes:
+        return ""
+    if notes_format != "html":
+        return notes
+    return " ".join(unescape(TAG_STRIP.sub(" ", notes)).split())
 
 from .config import load_sources
 from .content import arrange_media, format_label, render_article_soup, render_markdown_soup
@@ -29,6 +40,7 @@ from .sessions import (
     queue_state,
     rename_article,
     save_notes,
+    update_queue,
 )
 from .timed_reading import session_state, timer_action
 from .youtube import video_duration
@@ -42,14 +54,36 @@ def handle_api_get(db, database, config, path, query, *, is_admin, read_state_ar
 
         selected = params.get("selected", [""])[0]
         q = params.get("q", [""])[0]
-        payload = {"articles": library_rows(db, selected=selected), "storage": storage_usage(database)}
+        payload = {"articles": library_rows(db, selected=selected, include_body_text=bool(q)), "storage": storage_usage(database)}
         if q:
             matched = fts_match_urls(db, q)
             if matched is not None:
                 payload["fts_urls"] = sorted(matched)
         return payload, 200
     if path == "/api/sources":
-        return {"sources": [asdict(source) for source in load_sources(config)]}, 200
+        from .source_view import recent_excluded, source_health
+
+        return {
+            "sources": [asdict(source) for source in load_sources(config)],
+            "health": source_health(db),
+            "excluded": recent_excluded(db),
+        }, 200
+    if path == "/api/watchlists":
+        from .watchlists import list_watchlists
+
+        return {"watchlists": list_watchlists(db)}, 200
+    if path == "/api/ai-status":
+        from .ai_assist import ai_status
+
+        return ai_status(), 200
+    if path == "/api/ai-results":
+        from .ai_assist import saved_results
+
+        return {"results": saved_results(db, params.get("url", [""])[0])}, 200
+    if path == "/api/home-gym":
+        from .home_gym import home_gym_data
+
+        return home_gym_data(db), 200
     if path == "/api/stats":
         from .stats import stats_data
 
@@ -62,6 +96,17 @@ def handle_api_get(db, database, config, path, query, *, is_admin, read_state_ar
             return {"error": "Job not found."}, 404
         return job, 200
     if path == "/api/state":
+        from .watchlists import article_cve_summary, list_watchlists, match_watchlists
+
+        watched = list_watchlists(db)
+        cves_by_url, kev_by_url = article_cve_summary(db)
+        raw_rows = read_state_articles(database)
+        try:
+            limit = int(params.get("limit", ["0"])[0])
+        except ValueError:
+            limit = 0
+        if limit > 0:
+            raw_rows = raw_rows[:limit]
         articles = [
             dict(
                 {
@@ -78,20 +123,34 @@ def handle_api_get(db, database, config, path, query, *, is_admin, read_state_ar
                     )
                 },
                 format_label=format_label(r["content_format"], r["publisher"]),
-                note_preview=BeautifulSoup(r["notes"] or "", "html.parser").get_text(" ", strip=True)
-                if r["notes_format"] == "html"
-                else (r["notes"] or ""),
+                note_preview=_fast_note_preview(r["notes"], r["notes_format"]),
                 has_notes=has_notes(r["notes"], r["notes_format"]),
                 article_types=article_types(r["title"], r["content_text"]),
+                cves=cves_by_url.get(r["url"], []),
+                kev_cves=kev_by_url.get(r["url"], []),
+                watchlist_hits=match_watchlists(
+                    watched,
+                    r["title"],
+                    r["publisher"],
+                    r["content_text"] or "",
+                    cves_by_url.get(r["url"], ()),
+                ),
             )
-            for r in read_state_articles(database)
+            for r in raw_rows
         ]
         return {
             "articles": articles,
             "queue": queue_state(db),
             "week": week_counts(db),
             "in_progress": in_progress_count(db),
+            "watchlists": watched,
         }, 200
+    if path == "/api/queue":
+        return {"queue": queue_state(db)}, 200
+    if path == "/api/indicators":
+        from .indicators import indicator_options, indicators_data
+
+        return indicators_data(db, **indicator_options(params)), 200
     if path == "/api/tags":
         from .tags import tag_state
 
@@ -151,6 +210,25 @@ def handle_api_get(db, database, config, path, query, *, is_admin, read_state_ar
             title.decompose()
         arrange_media(soup, row["title"], row["url"])
         body_html = str(soup)
+        from urllib.parse import urlencode
+
+        cite_href = "/?" + urlencode({"open": row["url"]})
+        backlinks = [
+            {"kind": "article", "title": b["title"], "href": "/?" + urlencode({"open": b["url"]})}
+            for b in db.execute(
+                "SELECT url, title FROM articles WHERE url<>? AND instr(notes, ?)>0 ORDER BY julianday(published_at) DESC LIMIT 20",
+                (row["url"], cite_href),
+            )
+        ] + [
+            {"kind": "topic", "title": t["name"], "href": "/topic?" + urlencode({"id": t["id"]})}
+            for t in db.execute(
+                "SELECT id, name FROM topics WHERE instr(notes, ?)>0 ORDER BY name COLLATE NOCASE LIMIT 20",
+                (cite_href,),
+            )
+        ]
+        from .indicators import apply_indicator_curation
+
+        curated_iocs = apply_indicator_curation(db, row["url"], extract_iocs(body_html))
         return dict(
             content_format=row["content_format"],
             format_label=format_label(row["content_format"], row["publisher"]),
@@ -166,7 +244,8 @@ def handle_api_get(db, database, config, path, query, *, is_admin, read_state_ar
             body_html=body_html,
             body_format="html" if row["content_html"] else "markdown",
             highlights=list_highlights(db, row["url"]),
-            iocs=extract_iocs(body_html),
+            iocs=curated_iocs,
+            backlinks=backlinks,
             position=get_position(db, row["url"]),
             transcript=transcript_info(database, row, is_admin),
             duration=video_duration(row["media_json"]),
@@ -180,6 +259,8 @@ def handle_api_mutation(db, path, data):
         return {"session": timer_action(db, data)}, 200
     if path == "/api/queue":
         return create_queue(db, data.get("urls")), 200
+    if path == "/api/queue-update":
+        return update_queue(db, data.get("urls")), 200
     if path == "/api/notes":
         return {
             "revision": save_notes(
@@ -204,6 +285,30 @@ def handle_api_mutation(db, path, data):
         return save_position(db, data.get("url"), data.get("fraction")), 200
     if path == "/api/triage":
         return set_triage(db, data.get("urls"), data.get("decision")), 200
+    if path == "/api/watchlists":
+        from .watchlists import add_watchlist
+
+        return add_watchlist(db, data.get("term")), 200
+    if path == "/api/watchlist-delete":
+        from .watchlists import delete_watchlist
+
+        return delete_watchlist(db, data.get("id")), 200
+    if path == "/api/indicator-ignore":
+        from .indicators import ignore_indicator
+
+        return ignore_indicator(db, data.get("kind"), data.get("value")), 200
+    if path == "/api/indicator-unignore":
+        from .indicators import unignore_indicator
+
+        return unignore_indicator(db, data.get("kind"), data.get("value")), 200
+    if path == "/api/indicator-add":
+        from .indicators import add_manual_indicator
+
+        return add_manual_indicator(db, data.get("url"), data.get("kind"), data.get("value")), 200
+    if path == "/api/indicator-remove":
+        from .indicators import delete_manual_indicator
+
+        return delete_manual_indicator(db, data.get("url"), data.get("kind"), data.get("value")), 200
     if path == "/api/tags":
         from .tags import add_tag
 

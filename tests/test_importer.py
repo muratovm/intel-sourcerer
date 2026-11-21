@@ -22,6 +22,9 @@ def test_relevance_excludes_incidental_security():
     assert relevance_reason(a) is None
     assert relevance_reason(replace(a,title='Disrupting malicious activity'))
     assert relevance_reason(replace(a,title='Retail productivity',summary_html='')) is None
+    assert relevance_reason(replace(a,title='Java4Shell (CVE-2026-114938): Post-Exploitation Activity',summary_html=''))
+    assert relevance_reason(replace(a,title='Hidden in the Weights: Supply Chain Risk from Backdoored LoRA Models',summary_html=''))
+    assert relevance_reason(replace(a,title='CrowdStrike Named a Leader in 2026 Gartner MQ',summary_html='Cybersecurity')) is None
 
 
 def test_idempotent_import_preserves_good_content_after_fetch_failure(tmp_path):

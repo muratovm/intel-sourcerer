@@ -66,6 +66,8 @@ if (newTopicDialog) {
   });
 }
 
+const MAX_QUEUE_ITEMS = 10;
+
 function make(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -102,7 +104,6 @@ function renderOverview(data) {
   $("stat-figures").replaceChildren(
     ...[
       [data.articles, `${data.articles === 1 ? "article" : "articles"} in ${plural(data.topics, "topic")}`],
-      [data.unread, "unread"],
       [data.open_questions, data.open_questions === 1 ? "open question" : "open questions"],
       [data.might_belong, "might belong"],
     ].map(([value, label]) => {
@@ -151,12 +152,15 @@ function renderOverview(data) {
   $("stat-shared-list").replaceChildren(
     ...data.shared.map((item) => {
       const row = make("div", "stat-row"),
-        links = make("span", "stat-row-topics");
+        links = make("span", "stat-row-topics"),
+        indLink = make("a", "topic-ind-link");
+      indLink.href = "/indicators?" + new URLSearchParams({ q: item.value });
+      indLink.append(make("code", "", item.value));
       item.topics.forEach((topic, index) => {
         if (index) links.append(", ");
         links.append(topicLinkTo(topic));
       });
-      row.append(make("code", "", item.value), links);
+      row.append(indLink, links);
       return row;
     }),
   );
@@ -266,13 +270,77 @@ if (page) {
     }
   });
 
+  // Unified Reading Queue sync for per-article + Queue and Queue next N unread.
+  let activeQueueURLs = [];
+  function syncTopicQueueButtons() {
+    const queued = new Set(activeQueueURLs);
+    const full = queued.size >= MAX_QUEUE_ITEMS;
+    document.querySelectorAll(".topic-article-queue[data-queue-url]").forEach((btn) => {
+      const inQueue = queued.has(btn.dataset.queueUrl);
+      btn.textContent = inQueue ? "Queued ✓" : "+ Queue";
+      btn.setAttribute("aria-pressed", String(inQueue));
+      btn.classList.toggle("is-queued", inQueue);
+      btn.disabled = !inQueue && full;
+      btn.title = !inQueue && full ? `Queue is full (${MAX_QUEUE_ITEMS} articles max)` : "";
+    });
+  }
+  async function updateTopicQueue(urls) {
+    try {
+      const q = await api("/api/queue-update", { urls });
+      activeQueueURLs = q && !q.finished && Array.isArray(q.items) ? q.items.map((item) => item.url) : [];
+      syncTopicQueueButtons();
+    } catch (error) {
+      notice(error.message);
+    }
+  }
+  document.querySelectorAll(".topic-article-queue[data-queue-url]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const url = btn.dataset.queueUrl;
+      if (activeQueueURLs.includes(url)) {
+        updateTopicQueue(activeQueueURLs.filter((u) => u !== url));
+      } else {
+        if (activeQueueURLs.length >= MAX_QUEUE_ITEMS) {
+          notice(`Queue is full (${MAX_QUEUE_ITEMS} articles max). Finish or remove one to add more.`);
+          return;
+        }
+        updateTopicQueue([...activeQueueURLs, url]);
+      }
+    });
+  });
+  api("/api/queue")
+    .then((data) => {
+      const q = data.queue;
+      activeQueueURLs = q && !q.finished && Array.isArray(q.items) ? q.items.map((item) => item.url) : [];
+      syncTopicQueueButtons();
+    })
+    .catch(() => {});
+
+  // Chronological sort toggle inside a topic.
+  const sortToggle = $("topic-sort-toggle");
+  const articleListEl = document.querySelector(".topic-articles > .topic-article-list");
+  if (sortToggle && articleListEl) {
+    sortToggle.addEventListener("click", () => {
+      const desc = sortToggle.dataset.sort !== "desc";
+      sortToggle.dataset.sort = desc ? "desc" : "asc";
+      sortToggle.textContent = desc ? "Newest first ⇅" : "Oldest first ⇅";
+      const rows = [...articleListEl.querySelectorAll(".topic-article")];
+      rows
+        .sort((a, b) => {
+          const cmp = (a.dataset.published || "").localeCompare(b.dataset.published || "");
+          return desc ? -cmp : cmp;
+        })
+        .forEach((row) => articleListEl.append(row));
+    });
+  }
+
   $("read-unread").addEventListener("click", (event) => {
     const urls = event.target.dataset.urls
       .split(" ")
       .filter(Boolean)
-      .map((link) => new URLSearchParams(link.split("?")[1]).get("open"));
+      .map((link) => new URLSearchParams(link.split("?")[1]).get("open"))
+      .filter(Boolean);
     saveThen(async () => {
-      await api("/api/queue", { urls: urls.slice(0, 100) });
+      await api("/api/queue", { urls: urls.slice(0, MAX_QUEUE_ITEMS) });
       location.assign("/?view=reader");
     });
   });
@@ -374,16 +442,20 @@ if (page) {
     $("topic-indicator-list").replaceChildren(
       ...data.indicators.map((item) => {
         const row = document.createElement("li"),
+          link = document.createElement("a"),
           value = document.createElement("code"),
           kind = document.createElement("span"),
           articles = document.createElement("span");
+        link.className = "topic-ind-link";
+        link.href = "/indicators?" + new URLSearchParams({ q: item.value });
         value.textContent = item.value;
+        link.append(value);
         kind.className = "ioc-name";
         kind.textContent = item.kind;
         articles.className = "muted";
         articles.textContent = `${item.articles} of ${data.total_articles}`;
         const label = document.createElement("span");
-        label.append(value, kind);
+        label.append(link, kind);
         row.append(label, articles);
         return row;
       }),

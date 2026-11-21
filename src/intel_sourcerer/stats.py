@@ -93,6 +93,7 @@ def render_stats_section(data, now=None):
         today_year=today.year,
         total_label=f"{total} article{'' if total == 1 else 's'} read",
         active_days_label=f"{len(counts)} active day{'' if len(counts) == 1 else 's'}",
+        timezone_label=zone.key,
         month_labels="".join(month_cells),
         today_year2=today.year,
         day_cells="".join(cells),

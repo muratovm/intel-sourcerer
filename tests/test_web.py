@@ -88,7 +88,7 @@ def test_read_toggle_persists_both_states_and_rejects_invalid_requests(tmp_path)
             assert state['articles'][0]['triage']=='keep' and set(state['week'])=={'saved','read'}
             db.execute("UPDATE articles SET content_markdown=content_markdown||'\n\nDropper loader.exe has MD5 2915b3f8b703eb744fc54c81f4a9c67f' WHERE url=?",(article.url,));db.commit()
             found=client.get('/api/article',params={'url':article.url}).json()['iocs']
-            assert found=={'cves':[],'techniques':[],'hashes':[{'value':'2915b3f8b703eb744fc54c81f4a9c67f','type':'MD5'}],'files':[{'value':'loader.exe','common':False}]}
+            assert found=={'cves':[],'techniques':[],'entities':[],'hashes':[{'value':'2915b3f8b703eb744fc54c81f4a9c67f','type':'MD5'}],'domains':[],'ips':[],'urls':[],'files':[{'value':'loader.exe','common':False}],'registry':[]}
             exported=client.get('/export',params={'url':article.url}).text
             assert '## Indicators' in exported and '`loader.exe`' in exported
             assert '## Highlights' in exported and '> Chart' in exported
