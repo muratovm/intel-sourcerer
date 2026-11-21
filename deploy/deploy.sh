@@ -138,4 +138,24 @@ fi
 ln -sfn "$RELEASE" "$ROOT/current.next"
 mv -Tf "$ROOT/current.next" "$ROOT/current"
 stopped=0
+
+# Prune older pre-deploy snapshots and releases so repeated deployments cannot fill the VM disk.
+keep_backups=${INTEL_KEEP_BACKUPS:-5}
+if [[ $keep_backups =~ ^[0-9]+$ ]] && (( keep_backups > 0 )); then
+    mapfile -t old_backups < <(find "$ROOT/backups" -mindepth 1 -maxdepth 1 -type d | sort)
+    if (( ${#old_backups[@]} > keep_backups )); then
+        for old in "${old_backups[@]:0:${#old_backups[@]}-keep_backups}"; do
+            rm -rf -- "$old"
+        done
+    fi
+fi
+if [[ -d "$ROOT/releases" ]]; then
+    mapfile -t old_releases < <(find "$ROOT/releases" -mindepth 1 -maxdepth 1 -type d | sort)
+    if (( ${#old_releases[@]} > 5 )); then
+        for old in "${old_releases[@]:0:${#old_releases[@]}-5}"; do
+            [[ $old == "$RELEASE" || $old == "$previous" ]] && continue
+            rm -rf -- "$old"
+        done
+    fi
+fi
 echo "Healthy deployment: $ARG"

@@ -83,3 +83,26 @@ def week_counts(db, now=None):
     saved = db.execute("SELECT COUNT(*) FROM articles WHERE julianday(discovered_at)>=julianday(?)", (since,)).fetchone()[0]
     read = db.execute("SELECT COUNT(*) FROM article_reads WHERE julianday(read_at)>=julianday(?)", (since,)).fetchone()[0]
     return {"saved": saved, "read": read}
+
+
+# Scrolling this far, writing a note or highlighting a passage counts as having started an article.
+STARTED_FRACTION = 0.02
+
+
+def is_in_progress(is_read, fraction, noted, highlighted):
+    """Started but not marked read: the articles worth picking back up."""
+    return not is_read and ((fraction or 0) >= STARTED_FRACTION or bool(noted) or bool(highlighted))
+
+
+def in_progress_count(db):
+    from .sessions import has_notes
+
+    rows = db.execute(
+        "SELECT a.notes,a.notes_format,p.fraction,"
+        "EXISTS(SELECT 1 FROM article_highlights h WHERE h.article_url=a.url) AS highlighted "
+        "FROM articles a LEFT JOIN reading_positions p ON p.article_url=a.url WHERE a.is_read=0"
+    )
+    return sum(
+        is_in_progress(False, row["fraction"], has_notes(row["notes"], row["notes_format"]), row["highlighted"])
+        for row in rows
+    )

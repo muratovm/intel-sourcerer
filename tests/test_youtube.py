@@ -15,7 +15,7 @@ def test_video_import_preserves_notes(tmp_path, monkeypatch):
     transport = httpx.MockTransport(lambda request: httpx.Response(200,json={'title':'Security talk','author_name':'Research channel'}))
     monkeypatch.setattr(youtube.httpx,'AsyncClient',lambda **kw:original(transport=transport,**kw))
     dbpath=tmp_path/'articles.db'
-    url=asyncio.run(youtube.import_video(dbpath,'dQw4w9WgXcQ'))
+    asyncio.run(youtube.import_video(dbpath,'dQw4w9WgXcQ'))
     db=connect_database(dbpath)
     row=db.execute('SELECT title,content_markdown FROM articles').fetchone()
     assert row['title']=='Security talk' and 'Video placeholder' in row['content_markdown']

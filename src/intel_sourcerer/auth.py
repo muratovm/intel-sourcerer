@@ -2,6 +2,7 @@
 from pathlib import Path
 from contextlib import contextmanager, closing
 import hashlib
+import hmac
 import secrets
 import sqlite3
 import time
@@ -25,7 +26,18 @@ class Accounts:
             use_write_ahead_log(db)
             db.executescript('''CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,username TEXT UNIQUE NOT NULL,salt TEXT NOT NULL,password_hash TEXT NOT NULL,admin INTEGER NOT NULL,database_path TEXT NOT NULL,config_path TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT,csrf TEXT NOT NULL,expires REAL NOT NULL);
-            CREATE TABLE IF NOT EXISTS attempts(key TEXT NOT NULL,created REAL NOT NULL);''')
+            CREATE TABLE IF NOT EXISTS attempts(key TEXT NOT NULL,created REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS attempts_key_created ON attempts(key,created);
+            CREATE INDEX IF NOT EXISTS sessions_expires ON sessions(expires);
+            CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);''')
+            row = db.execute("SELECT value FROM meta WHERE key='anon_key'").fetchone()
+            if row:
+                self._anon_key = bytes.fromhex(row['value'])
+            else:
+                key_hex = secrets.token_hex(32)
+                db.execute("INSERT OR IGNORE INTO meta(key,value) VALUES ('anon_key',?)", (key_hex,))
+                self._anon_key = bytes.fromhex(db.execute("SELECT value FROM meta WHERE key='anon_key'").fetchone()['value'])
 
     def connect(self):
         db=sqlite3.connect(self.path,timeout=BUSY_TIMEOUT);db.row_factory=sqlite3.Row;return db
@@ -60,6 +72,11 @@ class Accounts:
                 or not secrets.compare_digest(password_hash(password, user["salt"]), user["password_hash"])
             ):
                 raise ValueError("The username or password is incorrect.")
+            if user["admin"]:
+                other_users = db.execute("SELECT COUNT(*) FROM users WHERE id<>?", (user_id,)).fetchone()[0]
+                other_admins = db.execute("SELECT COUNT(*) FROM users WHERE id<>? AND admin=1", (user_id,)).fetchone()[0]
+                if other_users > 0 and other_admins == 0:
+                    raise ValueError("Cannot delete the only administrator while other accounts exist.")
             db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
             db.execute("DELETE FROM users WHERE id=?", (user_id,))
         database, directory = Path(user["database_path"]), self.legacy.parent / "users" / user_id
@@ -68,7 +85,7 @@ class Accounts:
             # The first account's library sits beside the shared account data rather than in its own folder.
             for suffix in ("", "-wal", "-shm"):
                 Path(str(self.legacy) + suffix).unlink(missing_ok=True)
-            for name in ("backups", "media", "pdf-assets", "uploads"):
+            for name in ("backups", "media", "pdf-assets", "uploads", "transcribe-uploads"):
                 shutil.rmtree(self.legacy.parent / name, ignore_errors=True)
 
     def empty(self):
@@ -97,25 +114,72 @@ class Accounts:
             db.execute('INSERT INTO users VALUES(?,?,?,?,?,?,?)',(identifier,username,salt,hashed,int(first),str(database),str(config)))
         return identifier
 
+    def _sign_anon(self, csrf, expires):
+        payload = f"{csrf}.{expires}".encode()
+        return hmac.new(self._anon_key, payload, hashlib.sha256).hexdigest()
+
     def session(self,cookie):
         try:
             parsed=SimpleCookie();parsed.load(cookie or '')
             token=parsed['intel_session'].value
         except Exception:return None
+        if token.startswith('anon.'):
+            parts = token.split('.')
+            if len(parts) != 4:
+                return None
+            _, csrf, exp_str, sig = parts
+            try:
+                expires = int(exp_str)
+            except ValueError:
+                return None
+            if expires <= time.time() or not secrets.compare_digest(sig, self._sign_anon(csrf, expires)):
+                return None
+            return {
+                'token_hash': None,
+                'user_id': None,
+                'csrf': csrf,
+                'expires': float(expires),
+                'username': None,
+                'admin': 0,
+                'database_path': None,
+                'config_path': None,
+            }
         with self.transaction() as db:
             row=db.execute('SELECT s.*,u.username,u.admin,u.database_path,u.config_path FROM sessions s LEFT JOIN users u ON u.id=s.user_id WHERE token_hash=? AND expires>?',(hashlib.sha256(token.encode()).hexdigest(),time.time())).fetchone()
             return dict(row) if row else None
 
     def new_session(self,user_id=None):
-        token=secrets.token_urlsafe(32);csrf=secrets.token_urlsafe(32)
+        csrf=secrets.token_urlsafe(32)
+        if user_id is None:
+            expires = int(time.time() + 1800)
+            token = f"anon.{csrf}.{expires}.{self._sign_anon(csrf, expires)}"
+            return token, csrf
+        token=secrets.token_urlsafe(32)
         with self.transaction() as db:
             db.execute('DELETE FROM sessions WHERE expires<?',(time.time(),))
-            db.execute('INSERT INTO sessions VALUES(?,?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),user_id,csrf,time.time()+8*3600 if user_id else time.time()+1800))
+            db.execute('INSERT INTO sessions VALUES(?,?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),user_id,csrf,time.time()+8*3600))
         return token,csrf
 
     def revoke(self,session):
-        if session:
+        if session and session.get('token_hash'):
             with self.transaction() as db:db.execute('DELETE FROM sessions WHERE token_hash=?',(session['token_hash'],))
+
+    def record_setup_attempt(self, address):
+        key = 'setup:' + str(address)
+        with self.transaction() as db:
+            db.execute('DELETE FROM attempts WHERE created<?', (time.time() - 900,))
+            if (
+                db.execute('SELECT COUNT(*) FROM attempts WHERE key=?', (key,)).fetchone()[0] >= 10
+                or db.execute("SELECT COUNT(*) FROM attempts WHERE key='setup:*'").fetchone()[0] >= 30
+            ):
+                raise ValueError('Too many setup attempts. Try again in 15 minutes.')
+            now = time.time()
+            db.execute('INSERT INTO attempts VALUES(?,?)', (key, now))
+            db.execute('INSERT INTO attempts VALUES(?,?)', ('setup:*', now))
+
+    def clear_setup_attempts(self, address):
+        with self.transaction() as db:
+            db.execute("DELETE FROM attempts WHERE key=? OR key='setup:*'", ('setup:' + str(address),))
 
     def login(self,username,password,address):
         username=str(username).strip().lower();key=address+':'+username
@@ -132,5 +196,5 @@ class Accounts:
         hashed=password_hash(password,salt)
         if not user or not secrets.compare_digest(hashed,user['password_hash']):
             raise ValueError('Invalid username or password.')
-        with self.transaction() as db:db.execute('DELETE FROM attempts WHERE key=? OR key=?',(key,address))
+        with self.transaction() as db:db.execute('DELETE FROM attempts WHERE key=?',(key,))
         return user['id']

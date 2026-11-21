@@ -2,15 +2,30 @@
 const userStoragePrefix = "user:" + document.querySelector('meta[name="user-id"]').content + ":";
 const token = document.querySelector('meta[name="csrf-token"]').content;
 async function libraryAPI(path, data) {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": token },
-    body: JSON.stringify(data),
-  });
+  const response = await fetch(
+    path,
+    data === undefined
+      ? {}
+      : {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": token },
+          body: JSON.stringify(data),
+        },
+  );
   const result = await response.json();
   if (!response.ok)
     throw new Error(result.error || "Unable to complete this action.");
   return result;
+}
+async function importPlaylistJob(url) {
+  const started = await libraryAPI("/api/jobs/playlist", { url });
+  if (!started?.id) return started;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const job = await libraryAPI("/api/jobs?" + new URLSearchParams({ id: started.id }));
+    if (job.state === "done") return job.result;
+    if (job.state === "failed") throw new Error(job.error || "Playlist import failed.");
+  }
 }
 const deleteButton = document.querySelector(".lib-delete"),
   dialog = document.getElementById("delete-dialog"),
@@ -73,7 +88,9 @@ async function addLinks(text) {
       ? "Importing the playlist into a topic. Reading a long playlist can take a minute…"
       : `Fetching article ${added + errors.length + 1} of ${urls.length}…`;
     try {
-      const result = await libraryAPI("/api/link", { url });
+      const result = isPlaylist(url)
+        ? await importPlaylistJob(url)
+        : await libraryAPI("/api/link", { url });
       lastURL = result.url;
       lastTopic = result.topic || lastTopic;
       added++;

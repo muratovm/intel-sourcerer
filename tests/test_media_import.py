@@ -3,7 +3,7 @@ from io import BytesIO
 from email.message import EmailMessage
 import httpx
 from pptx import Presentation
-from intel_sourcerer.media_import import import_file,import_podcast_feed,save_item
+from intel_sourcerer.media_import import import_file,import_podcast_feed
 from intel_sourcerer import github_import,discovery
 from intel_sourcerer.storage import connect_database
 

@@ -1,9 +1,10 @@
 """Import repository READMEs and release notes through GitHub's public API."""
 import base64
+import json
 from urllib.parse import urlsplit, quote
 import httpx
 
-from .net_safety import public_only
+from .net_safety import public_only, read_bounded_bytes_async
 from .media_import import save_item
 
 
@@ -20,10 +21,10 @@ async def import_github(database,url):
     else:
         api += '/readme'
     async with public_only(httpx.AsyncClient(timeout=20,headers={'Accept':'application/vnd.github+json','User-Agent':'IntelSourcerer/0.1'},trust_env=False)) as client:
-        response = await client.get(api)
-        if response.status_code!=200:
-            raise ValueError('GitHub could not provide this public README or release (it may be unavailable or rate limited).')
-        data=response.json()
+        async with client.stream('GET', api) as response:
+            if response.status_code!=200:
+                raise ValueError('GitHub could not provide this public README or release (it may be unavailable or rate limited).')
+            data=json.loads(await read_bounded_bytes_async(response, 10_000_000, 'GitHub response exceeds 10 MB.'))
     if release:
         markdown=data.get('body') or 'No release notes supplied.'
         title=f'{owner}/{repo} · {data.get("name") or data.get("tag_name") or "Release"}'

@@ -1,4 +1,5 @@
 """Daily SQLite snapshots before edits, independent of Git."""
+from contextlib import closing
 from pathlib import Path
 from datetime import datetime, timezone
 import re
@@ -20,18 +21,27 @@ def prune_backups(database, keep=KEEP_DAILY):
         old.unlink(missing_ok=True)
 
 
+def _snapshot_file(path):
+    destination=path.parent/'backups'/f'{path.stem}-{datetime.now(timezone.utc):%Y-%m-%d}.sqlite3'
+    if destination.exists():
+        return destination
+    destination.parent.mkdir(parents=True,exist_ok=True)
+    temporary=destination.with_suffix('.tmp')
+    try:
+        with closing(sqlite3.connect(path, timeout=BUSY_TIMEOUT)) as source, closing(sqlite3.connect(temporary)) as target:
+            source.backup(target)
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    prune_backups(path)
+    return destination
+
+
 def backup_database(database):
     path=Path(database)
-    destination=path.parent/'backups'/f'{path.stem}-{datetime.now(timezone.utc):%Y-%m-%d}.sqlite3'
     with _lock:
-        if destination.exists():return destination
-        destination.parent.mkdir(parents=True,exist_ok=True)
-        temporary=destination.with_suffix('.tmp')
-        try:
-            with sqlite3.connect(path, timeout=BUSY_TIMEOUT) as source, sqlite3.connect(temporary) as target:
-                source.backup(target)
-            temporary.replace(destination)
-        finally:
-            temporary.unlink(missing_ok=True)
-        prune_backups(path)
+        destination = _snapshot_file(path)
+        accounts_db = path.parent / 'accounts.sqlite3'
+        if path.name != 'accounts.sqlite3' and accounts_db.is_file():
+            _snapshot_file(accounts_db)
     return destination

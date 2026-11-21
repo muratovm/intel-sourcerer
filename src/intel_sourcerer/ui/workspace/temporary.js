@@ -79,8 +79,9 @@
       const article = model.articles.find(item => item.url === data.url);
       if (!article) throw new Error('Article not found.');
       if (['audio', 'video'].includes(article.content_format)) throw new Error('Use playback controls for audio/video.');
-      const body = document.createElement('div');
-      body.innerHTML = article.body_html || '';
+      const template = document.createElement('template');
+      template.innerHTML = article.body_html || '';
+      const body = template.content || template;
       body.querySelectorAll('[data-reading-exclude], figure, video, iframe').forEach(element => element.remove());
       const words = (body.textContent || '').trim().split(/\s+/).filter(Boolean).length;
       if (!words) throw new Error('This article has no saved text to time.');
@@ -142,11 +143,13 @@
         const article = model.articles.find(a => a.url === data.url);
         if (!article || article.notes_revision !== data.revision) throw new Error('Notes changed. Refresh before editing.');
         if (typeof data.text !== 'string' || data.text.length > 100000) throw new Error('Invalid notes.');
-        const container = document.createElement('div');
-        container.innerHTML = data.text;
+        const template = document.createElement('template');
+        template.innerHTML = data.text;
+        const container = template.content || template;
         for (const element of [...container.querySelectorAll('*')]) {
-          const href = element.tagName === 'A' && /^(https?:|mailto:)/i.test((element.getAttribute('href') || '').trim()) ? element.getAttribute('href').trim() : '';
-          if (!href && !['P','DIV','BR','STRONG','B','EM','I','MARK','BLOCKQUOTE','UL','OL','LI','PRE','CODE'].includes(element.tagName)) element.replaceWith(...element.childNodes);
+          const rawHref = (element.getAttribute('href') || '').trim();
+          const href = element.tagName === 'A' && /^(https?:|mailto:|\/\?open=)/i.test(rawHref) ? rawHref : '';
+          if (!href && !['P','DIV','BR','STRONG','B','EM','I','MARK','BLOCKQUOTE','UL','OL','LI','PRE','CODE','TABLE','THEAD','TBODY','TR','TH','TD'].includes(element.tagName)) element.replaceWith(...element.childNodes);
           else {
             const checklist = element.tagName === 'UL' && element.classList.contains('checklist'), checked = element.tagName === 'LI' && element.dataset.checked === 'true';
             for (const attribute of [...element.attributes]) element.removeAttribute(attribute.name);
@@ -155,9 +158,9 @@
             if (href) { element.setAttribute('href', href); element.setAttribute('target', '_blank'); element.setAttribute('rel', 'noopener noreferrer'); }
           }
         }
-        article.notes = container.innerHTML;
+        article.notes = template.innerHTML;
         article.notes_format = 'html';
-        article.has_notes = !!container.textContent.trim();
+        article.has_notes = !!(container.textContent || '').trim();
         article.notes_updated_at = new Date().toISOString();
         result = {revision: ++article.notes_revision};
       } else if (path === '/api/highlights' && data) {

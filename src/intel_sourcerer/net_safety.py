@@ -12,6 +12,8 @@ import httpx
 from http.server import ThreadingHTTPServer
 
 LOOPBACK_HOSTS = {'127.0.0.1', '::1', 'localhost'}
+ALLOWED_HTTP_PORTS = {80, 443}
+MAX_RESPONSE_BYTES = 20_000_000
 
 
 def env_flag(name):
@@ -44,7 +46,10 @@ def public_addresses(host, port):
 class _PublicOnlySync(httpcore.SyncBackend):
     def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
         failure = None
-        for address in public_addresses(host, port):
+        addresses = public_addresses(host, port)
+        if port not in ALLOWED_HTTP_PORTS:
+            raise httpcore.ConnectError('Blocked a connection to a non-HTTP port.')
+        for address in addresses:
             try:
                 return super().connect_tcp(address, port, timeout, local_address, socket_options)
             except httpcore.ConnectError as exc:
@@ -55,12 +60,35 @@ class _PublicOnlySync(httpcore.SyncBackend):
 class _PublicOnlyAsync(httpcore.AnyIOBackend):
     async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
         failure = None
-        for address in await asyncio.to_thread(public_addresses, host, port):
+        addresses = await asyncio.to_thread(public_addresses, host, port)
+        if port not in ALLOWED_HTTP_PORTS:
+            raise httpcore.ConnectError('Blocked a connection to a non-HTTP port.')
+        for address in addresses:
             try:
                 return await super().connect_tcp(address, port, timeout, local_address, socket_options)
             except httpcore.ConnectError as exc:
                 failure = exc
         raise failure
+
+
+def read_bounded_bytes(response, max_bytes=MAX_RESPONSE_BYTES, message=None):
+    """Stream a sync httpx response up to max_bytes so oversized bodies cannot exhaust memory."""
+    data = bytearray()
+    for chunk in response.iter_bytes():
+        data.extend(chunk)
+        if len(data) > max_bytes:
+            raise ValueError(message or f'Response exceeds {max_bytes} bytes.')
+    return bytes(data)
+
+
+async def read_bounded_bytes_async(response, max_bytes=MAX_RESPONSE_BYTES, message=None):
+    """Stream an async httpx response up to max_bytes so oversized bodies cannot exhaust memory."""
+    data = bytearray()
+    async for chunk in response.aiter_bytes():
+        data.extend(chunk)
+        if len(data) > max_bytes:
+            raise ValueError(message or f'Response exceeds {max_bytes} bytes.')
+    return bytes(data)
 
 
 def public_only(client):

@@ -1,5 +1,5 @@
 """Named collections of articles on one subject, with notes about the collection as a whole."""
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 import re
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -28,8 +28,7 @@ MEMBERS = """topic_articles m JOIN articles a ON a.url=m.article_url
 
 
 def _now():
-    # Local time, because the list shows this date: an evening edit shouldn't read as tomorrow.
-    return datetime.now().astimezone().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _day(value):
@@ -201,44 +200,39 @@ def open_questions(notes):
 
 
 def list_topics(db):
+    topic_rows = db.execute("SELECT * FROM topics ORDER BY updated_at DESC,name").fetchall()
+    if not topic_rows:
+        return {"topics": []}
+    members_by_topic = {}
+    for item in db.execute(
+        f"""SELECT m.topic_id,a.url,a.source_id,a.is_read,a.published_at
+        FROM {MEMBERS} ORDER BY m.topic_id,julianday(a.published_at),a.url"""
+    ):
+        members_by_topic.setdefault(item["topic_id"], []).append(item)
+    indicators_by_topic = {}
+    for item in db.execute(
+        f"""SELECT DISTINCT m.topic_id,i.value FROM {MEMBERS}
+        JOIN article_indicators i ON i.article_url=a.url"""
+    ):
+        indicators_by_topic.setdefault(item["topic_id"], []).append(item["value"])
     topics = []
-    for row in db.execute("SELECT * FROM topics ORDER BY updated_at DESC,name").fetchall():
-        counts = db.execute(
-            f"""SELECT count(*) AS articles,count(DISTINCT a.source_id) AS publishers,
-            coalesce(sum(a.is_read=0),0) AS unread FROM {MEMBERS} WHERE m.topic_id=?""",
-            (row["id"],),
-        ).fetchone()
-        latest = db.execute(
-            f"SELECT a.published_at FROM {MEMBERS} WHERE m.topic_id=? ORDER BY julianday(a.published_at) DESC LIMIT 1",
-            (row["id"],),
-        ).fetchone()
+    for row in topic_rows:
+        tid = row["id"]
+        members = members_by_topic.get(tid, ())
         topics.append(
             {
-                "id": row["id"],
+                "id": tid,
                 "name": row["name"],
                 "status": row["status"],
                 "updated_at": row["updated_at"],
                 "notes_text": _note_text(row["notes"]),
-                "articles": counts["articles"],
-                "publishers": counts["publishers"],
-                "unread": counts["unread"],
+                "articles": len(members),
+                "publishers": len({m["source_id"] for m in members}),
+                "unread": sum(1 for m in members if not m["is_read"]),
                 "open_questions": open_questions(row["notes"]),
-                "latest_report": latest[0] if latest else "",
-                "indicators": [
-                    item[0]
-                    for item in db.execute(
-                        f"""SELECT DISTINCT i.value FROM {MEMBERS} JOIN article_indicators i ON i.article_url=a.url
-                        WHERE m.topic_id=?""",
-                        (row["id"],),
-                    )
-                ],
-                "urls": [
-                    item[0]
-                    for item in db.execute(
-                        f"SELECT a.url FROM {MEMBERS} WHERE m.topic_id=? ORDER BY julianday(a.published_at),a.url",
-                        (row["id"],),
-                    )
-                ],
+                "latest_report": members[-1]["published_at"] if members else "",
+                "indicators": indicators_by_topic.get(tid, []),
+                "urls": [m["url"] for m in members],
             }
         )
     return {"topics": topics}
@@ -363,12 +357,41 @@ def topic_insights(db, topic_id):
     }
 
 
+def _tracked_suggestion_counts(db, topic_ids):
+    """Count qualifying suggestions for every tracked topic in a single query."""
+    counts = {tid: 0 for tid in topic_ids}
+    if not topic_ids:
+        return counts
+    by_pair = {}
+    for row in db.execute(
+        f"""SELECT m.topic_id,o.article_url AS url,i.kind,i.value
+        FROM {MEMBERS}
+        JOIN topics t ON t.id=m.topic_id AND t.status='tracking'
+        JOIN article_indicators i ON i.article_url=a.url
+        JOIN article_indicators o ON o.kind=i.kind AND o.value=i.value
+        JOIN articles c ON c.url=o.article_url
+        JOIN sources p ON p.id=c.source_id AND p.enabled=1
+        WHERE NOT EXISTS (SELECT 1 FROM topic_articles ta WHERE ta.topic_id=m.topic_id AND ta.article_url=o.article_url)
+          AND NOT EXISTS (SELECT 1 FROM topic_dismissed td WHERE td.topic_id=m.topic_id AND td.article_url=o.article_url)
+        GROUP BY m.topic_id,o.article_url,i.kind,i.value"""
+    ):
+        entry = by_pair.setdefault((row["topic_id"], row["url"]), [False, 0])
+        if row["kind"] != "techniques":
+            entry[0] = True
+        else:
+            entry[1] += 1
+    for (tid, _url), (has_strong, tech_count) in by_pair.items():
+        if tid in counts and (has_strong or tech_count >= MIN_SHARED_TECHNIQUES):
+            counts[tid] += 1
+    return counts
+
+
 def topics_overview(db, today=None):
     """Statistics across tracked topics. This reads every topic's matches, so pages ask for it after drawing."""
     today = today or date.today()
     remaining = refresh_index(db)
     tracked = db.execute("SELECT id,name,notes FROM topics WHERE status='tracking' ORDER BY name").fetchall()
-    belong = {row["id"]: len(_suggestions(db, row["id"])) for row in tracked}
+    belong = _tracked_suggestion_counts(db, [row["id"] for row in tracked])
     rows = db.execute(
         f"""SELECT m.topic_id,a.url,a.published_at,a.is_read,a.source_id FROM {MEMBERS}
         JOIN topics t ON t.id=m.topic_id AND t.status='tracking'"""

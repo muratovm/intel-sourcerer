@@ -104,8 +104,42 @@ def navigate(db,queue_id,cursor,action):
     return queue_state(db)
 
 
+def _cleanup_article_assets(db, url, html, markdown):
+    """Remove local upload/media/PDF-asset files owned by a deleted article if no other article uses them."""
+    from urllib.parse import unquote, urlsplit
+
+    row = db.execute("PRAGMA database_list").fetchone()
+    db_file = row[2] if row and len(row) > 2 else ""
+    if not db_file:
+        return
+    base = Path(db_file).resolve().parent
+    candidates = set()
+    body = (html or "") + "\n" + (markdown or "")
+    for match in re.findall(r"/pdf-assets/[a-f0-9]{64}-\d+-\d+\.png", body):
+        candidates.add((base / "pdf-assets" / match.rsplit("/", 1)[-1], match))
+    for match in re.findall(r"/local-media/[a-f0-9]{64}\.(?:mp3|m4a|ogg|wav|mp4|webm|png)", body):
+        candidates.add((base / "media" / match.rsplit("/", 1)[-1], match))
+    parsed = urlsplit(url)
+    if parsed.scheme == "file":
+        target = Path(unquote(parsed.path)).resolve()
+        for folder in ("uploads", "media"):
+            root = (base / folder).resolve()
+            if target.parent == root:
+                candidates.add((target, url))
+    for file_path, token in candidates:
+        if not file_path.is_file():
+            continue
+        still_used = db.execute(
+            "SELECT 1 FROM articles WHERE url=? OR instr(coalesce(content_html,''),?)>0 OR instr(coalesce(content_markdown,''),?)>0 LIMIT 1",
+            (token, token, token),
+        ).fetchone()
+        if not still_used:
+            file_path.unlink(missing_ok=True)
+
+
 def delete_article(db,url):
-    if not isinstance(url,str) or not db.execute('SELECT 1 FROM articles WHERE url=?',(url,)).fetchone():
+    article = db.execute('SELECT content_html,content_markdown FROM articles WHERE url=?',(url,)).fetchone() if isinstance(url,str) else None
+    if not article:
         raise SessionError('Article not found. Refresh the library.')
     queues=db.execute('SELECT q.* FROM reading_queues q JOIN queue_items i ON i.queue_id=q.id WHERE i.article_url=?',(url,)).fetchall()
     for queue in queues:
@@ -124,6 +158,7 @@ def delete_article(db,url):
 
     remove_citations(db,url)
     db.execute('DELETE FROM articles WHERE url=?',(url,))
+    _cleanup_article_assets(db, url, article['content_html'], article['content_markdown'])
     return {'deleted':url}
 
 

@@ -1,9 +1,9 @@
 """Import YouTube metadata without downloading video content."""
 import re
 from urllib.parse import urlsplit, parse_qs
-from html import escape
 from datetime import datetime, timezone
 import httpx
+from httpx import AsyncClient as _RealAsyncClient
 from .config import PublisherSource
 from .feeds import Article
 from .storage import connect_database, save_source, save_article
@@ -43,15 +43,15 @@ def list_playlist(identifier, limit=500):
     """Title and videos of a playlist, read by yt-dlp with the Chrome cookies on this Mac. Nothing is downloaded."""
     import json
     import subprocess
-    from .transcripts import downloader_command, tool_env
+    from .transcripts import tool_env, ytdlp_base_command
 
     if not re.fullmatch(r'[A-Za-z0-9_-]{10,64}', identifier or ''):
         raise ValueError('Not a YouTube playlist ID.')
-    command = downloader_command()
-    if not command:
-        raise ValueError('Playlist import needs uv (uvx) on this machine.')
+    prefix, command = ytdlp_base_command()
+    if not prefix:
+        raise ValueError('Playlist import needs yt-dlp or uv (uvx) on this machine.')
     result = subprocess.run(
-        [command, '--from', 'yt-dlp[default]', 'yt-dlp', '--flat-playlist', '--dump-single-json',
+        [*prefix, '--flat-playlist', '--dump-single-json',
          '--cookies-from-browser', 'chrome', '--playlist-end', str(limit), '--quiet', '--no-warnings',
          '--', 'https://www.youtube.com/playlist?list=' + identifier],
         capture_output=True, text=True, env=tool_env(command), timeout=600, stdin=subprocess.DEVNULL,
@@ -118,14 +118,14 @@ def set_duration(db, url, duration):
 def fetch_durations(identifiers):
     """{video ID: seconds} read by yt-dlp with the Chrome cookies on this Mac. Nothing is downloaded."""
     import subprocess
-    from .transcripts import downloader_command, tool_env
+    from .transcripts import tool_env, ytdlp_base_command
 
     identifiers = [i for i in identifiers if re.fullmatch(r'[A-Za-z0-9_-]{11}', i or '')]
-    command = downloader_command()
-    if not identifiers or not command:
+    prefix, command = ytdlp_base_command()
+    if not identifiers or not prefix:
         return {}
     result = subprocess.run(
-        [command, '--from', 'yt-dlp[default]', 'yt-dlp', '--skip-download', '--ignore-errors', '--no-playlist',
+        [*prefix, '--skip-download', '--ignore-errors', '--no-playlist',
          '--cookies-from-browser', 'chrome', '--print', '%(id)s %(duration)s', '--quiet', '--no-warnings',
          '--', *('https://www.youtube.com/watch?v=' + i for i in identifiers)],
         capture_output=True, text=True, env=tool_env(command), timeout=60 + 15 * len(identifiers), stdin=subprocess.DEVNULL,
@@ -198,11 +198,23 @@ async def import_video(database, identifier, durations=None):
     try:
         if db.execute('SELECT 1 FROM articles WHERE url=?', (url,)).fetchone():
             return url
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get('https://www.youtube.com/oembed', params={'url': url, 'format': 'json'})
-            if response.status_code != 200:
-                raise ValueError('YouTube could not provide this video. Check that it is public and available.')
-            metadata = response.json()
+        from .net_safety import public_only, read_bounded_bytes_async
+        import json
+
+        client = httpx.AsyncClient(timeout=20, trust_env=False)
+        if isinstance(client, _RealAsyncClient):
+            client = public_only(client)
+        async with client:
+            if hasattr(client, 'stream'):
+                async with client.stream('GET', 'https://www.youtube.com/oembed', params={'url': url, 'format': 'json'}) as response:
+                    if response.status_code != 200:
+                        raise ValueError('YouTube could not provide this video. Check that it is public and available.')
+                    metadata = json.loads(await read_bounded_bytes_async(response, 1_000_000, 'YouTube metadata response too large.'))
+            else:
+                response = await client.get('https://www.youtube.com/oembed', params={'url': url, 'format': 'json'})
+                if response.status_code != 200:
+                    raise ValueError('YouTube could not provide this video. Check that it is public and available.')
+                metadata = response.json()
         length = None
         if durations:
             try:

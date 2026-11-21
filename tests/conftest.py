@@ -7,12 +7,4 @@ def no_real_whisper(monkeypatch):
     monkeypatch.setenv('INTEL_SOURCERER_WHISPER', '/nonexistent/mlx_whisper')
     # Never download from YouTube in tests either.
     monkeypatch.setenv('INTEL_SOURCERER_UVX', '/nonexistent/uvx')
-
-
-@pytest.fixture(autouse=True)
-def fresh_page_blocks():
-    """The importer remembers bot-checked sites per process; each test starts without that memory."""
-    from intel_sourcerer import importer
-    importer._pages_blocked_until.clear()
-    yield
-    importer._pages_blocked_until.clear()
+    monkeypatch.delenv('INTEL_SOURCERER_YTDLP', raising=False)

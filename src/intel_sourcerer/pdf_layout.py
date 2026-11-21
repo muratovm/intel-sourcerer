@@ -31,10 +31,14 @@ def extract_layout_article(data, url, directory):
     return extract_article(layout_html(data, url, directory), url)
 
 
+MAX_PDF_FIGURES = 200
+
+
 def layout_html(data, url, directory):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(data).hexdigest()
+    rendered_figures = 0
     with pymupdf.open(stream=data, filetype='pdf') as document:
         raw = ['\n'.join(block[4] for block in page.get_text('blocks') if not is_margin_page_number(block, page.rect)) for page in document]
         cleaned = strip_page_furniture(raw)
@@ -48,6 +52,9 @@ def layout_html(data, url, directory):
             entries = []
 
             def figure(rect, label):
+                nonlocal rendered_figures
+                if rendered_figures >= MAX_PDF_FIGURES:
+                    return
                 rect = pymupdf.Rect(rect) & page.rect
                 if rect.is_empty or rect.width < 20 or rect.height < 20:
                     return
@@ -59,6 +66,7 @@ def layout_html(data, url, directory):
                 # Bound rendering size for unusually large PDF page coordinates.
                 scale = min(1.5, 1800 / max(rect.width, rect.height))
                 page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), clip=rect, alpha=False).save(directory / name)
+                rendered_figures += 1
                 regions.append(rect)
                 src = '/pdf-assets/' + name
                 entries.append((rect.y0, f'<img src="{src}" alt="{escape(label)}"/>', rect, None))

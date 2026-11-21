@@ -2,17 +2,16 @@
 import asyncio
 from datetime import datetime, timezone
 import hashlib
-import ipaddress
 import socket
 from urllib.parse import urlsplit, urljoin, urldefrag, unquote
 from pathlib import Path
 import httpx
 
-from .net_safety import public_only
+from .net_safety import is_public_address, public_only
 from bs4 import BeautifulSoup
 import trafilatura
 from .content import extract_article
-from .pdf_content import extract_pdf
+from .pdf_content import extract_pdf_html
 from .config import PublisherSource
 from .feeds import Article, refusal_from
 from .storage import connect_database, save_source, save_article
@@ -32,12 +31,12 @@ def public_url(url):
     if parsed.scheme not in {'http','https'} or not parsed.hostname or parsed.username or parsed.password or parsed.port not in {None,80,443}:
         raise ValueError('Use a public HTTP or HTTPS article URL.')
     addresses=socket.getaddrinfo(parsed.hostname,parsed.port or (443 if parsed.scheme=='https' else 80),type=socket.SOCK_STREAM)
-    if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
+    if not addresses or any(not is_public_address(a[4][0]) for a in addresses):
         raise ValueError('Use a public article URL, rather than a local network address.')
     return urldefrag(url)[0]
 
 
-async def import_link(database, url, durations=None):
+async def import_link(database, url, durations=None, *, _pdf_meta=None):
     if not isinstance(url,str) or len(url)>4096:raise ValueError('Invalid article URL.')
     url=url.strip()
     from .youtube import video_id, import_video
@@ -121,9 +120,14 @@ async def import_link(database, url, durations=None):
         content_url = preferred['content_url'] if local_path is None and preferred else url
         now=datetime.now(timezone.utc);published=now
         if is_pdf:
-            title,content,markdown=await asyncio.to_thread(extract_pdf,payload,url)
+            if _pdf_meta is not None:
+                title, content = _pdf_meta
+            else:
+                title, content, _ = await asyncio.to_thread(extract_pdf_html, payload, url)
             from .pdf_layout import extract_layout_article
-            clean_html,markdown,media=await asyncio.to_thread(extract_layout_article,payload,url,Path(database).resolve().parent / 'pdf-assets')
+            clean_html, markdown, media = await asyncio.to_thread(
+                extract_layout_article, payload, url, Path(database).resolve().parent / 'pdf-assets'
+            )
         else:
             soup=BeautifulSoup(html,'html.parser');title=soup.find('meta',property='og:title')
             title=title.get('content') if title else soup.title.get_text(strip=True) if soup.title else urlsplit(url).hostname
@@ -153,11 +157,14 @@ async def import_pdf_upload(database, payload):
     """Keep an uploaded PDF under application data, then use the regular importer."""
     if not payload or len(payload) > 20_000_000:
         raise ValueError("PDF files must be no larger than 20 MB.")
-    # Validate before writing; use a content hash rather than an untrusted filename.
-    await asyncio.to_thread(extract_pdf, payload, "https://upload.invalid/document.pdf")
+    # Validate once before writing; use a content hash rather than an untrusted filename.
+    title, content, _ = await asyncio.to_thread(extract_pdf_html, payload, "https://upload.invalid/document.pdf")
     directory = Path(database).resolve().parent / "uploads"
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / (hashlib.sha256(payload).hexdigest() + ".pdf")
     if not path.exists():
         path.write_bytes(payload)
-    return await import_link(database, str(path))
+    # Recompute fallback title from the stored filename only if the PDF had no embedded /Title metadata.
+    if title == "document":
+        title = path.stem
+    return await import_link(database, str(path), _pdf_meta=(title, content))

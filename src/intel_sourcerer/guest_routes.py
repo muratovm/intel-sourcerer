@@ -60,7 +60,9 @@ def prepare_guest(headers, stream, client="unknown"):
         if len(body) != length:
             raise ValueError("Incomplete file.")
         return parse_session_content(body, headers.get("Content-Type", ""), charge), 200
-    except (ValueError, AttributeError, TypeError, OSError, httpx.HTTPError) as exc:
+    except (ValueError, httpx.HTTPError) as exc:
         return {"error": str(exc)}, 400
+    except (AttributeError, TypeError, OSError):
+        return {"error": "Invalid guest request."}, 400
     finally:
         GUEST_SLOTS.release()

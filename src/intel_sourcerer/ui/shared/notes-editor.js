@@ -338,6 +338,67 @@ noteBox.addEventListener("input", (event) => {
   const item = caretElement()?.closest("ul.checklist > li");
   if (item && !item.textContent.trim()) delete item.dataset.checked;
 });
+// Tab nests the item under the one above it; Shift+Tab lifts it a level, taking later siblings along as its children.
+// Moving a node resets any live Range inside it, so remember the raw positions instead.
+function keepCaret(action) {
+  const selection = window.getSelection(),
+    saved = selection.rangeCount ? selection.getRangeAt(0) : null,
+    points = saved && [saved.startContainer, saved.startOffset, saved.endContainer, saved.endOffset];
+  action();
+  if (!points) return;
+  const range = document.createRange();
+  range.setStart(points[0], points[1]);
+  range.setEnd(points[2], points[3]);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  noteRange = range.cloneRange();
+}
+function sublistLike(list) {
+  const sub = document.createElement(list.tagName.toLowerCase());
+  if (list.classList.contains("checklist")) sub.className = "checklist";
+  return sub;
+}
+function indentListItem(item) {
+  const previous = item.previousElementSibling;
+  if (previous?.tagName !== "LI") return false;
+  const list = item.parentElement;
+  keepCaret(() => {
+    // Join the sublist already ending the item above, or start one. Its own children come along.
+    let sub = previous.lastElementChild;
+    if (!sub?.matches("ul,ol")) {
+      sub = sublistLike(list);
+      previous.append(sub);
+    }
+    sub.append(item);
+  });
+  return true;
+}
+function outdentListItem(item) {
+  const list = item.parentElement,
+    parentItem = list.parentElement?.closest("li");
+  if (!parentItem || !noteBox.contains(parentItem) || parentItem !== list.parentElement)
+    return false;
+  keepCaret(() => {
+    const later = [];
+    for (let next = item.nextElementSibling; next; next = next.nextElementSibling)
+      later.push(next);
+    if (later.length) {
+      let sub = [...item.children].find((c) => c.matches("ul,ol"));
+      if (!sub) {
+        sub = sublistLike(list);
+        item.append(sub);
+      }
+      sub.append(...later);
+    }
+    parentItem.after(item);
+    if (!list.children.length) list.remove();
+  });
+  return true;
+}
+function nestedItem() {
+  const item = caretElement()?.closest("li");
+  return item && noteBox.contains(item) ? item : null;
+}
 // A 3-column table with a header row; inside a table the button adds a row below instead.
 function emptyRow(cells, tag = "td") {
   const row = document.createElement("tr");
@@ -504,6 +565,26 @@ noteBox.addEventListener("keydown", (event) => {
     if (cell && noteBox.contains(cell)) {
       event.preventDefault();
       moveTableCell(cell, event.shiftKey ? -1 : 1);
+      return;
+    }
+    const item = nestedItem();
+    if (item) {
+      // Keep Tab inside the list even when the item can't move, so focus doesn't jump away.
+      event.preventDefault();
+      if (event.shiftKey ? outdentListItem(item) : indentListItem(item)) {
+        noteChanged();
+        updateFormatButtons();
+      }
+      return;
+    }
+  }
+  // Enter on an empty nested item steps it out one level, like a word processor.
+  if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    const item = nestedItem();
+    if (item && !item.textContent.trim() && !item.querySelector("ul,ol") && outdentListItem(item)) {
+      event.preventDefault();
+      noteChanged();
+      updateFormatButtons();
       return;
     }
   }

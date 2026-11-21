@@ -39,7 +39,7 @@ def resource_details(row):
     from .youtube import video_duration
 
     media = row["content_format"] in {"audio", "video"} or row["url"].startswith("https://www.youtube.com/watch?v=")
-    transcribed = has_transcript(row.get("content_markdown"))
+    transcribed = bool(row["has_transcript"]) if "has_transcript" in row and row.get("content_markdown") is None else has_transcript(row.get("content_markdown"))
     words = reading_word_count(row.get("content_markdown"), row.get("content_text") or "", row.get("content_html")) if not media or transcribed else 0
     read = f"~{max(1, -(-words // 200))} min read · {words:,} words" if words else ""
     facts = []
@@ -61,7 +61,7 @@ def resource_details(row):
     if topics:
         facts.append(("Topics", ", ".join(
             f'<a href="{escape("/topic?" + urlencode({"id": t["id"]}), quote=True)}">{escape(t["name"])}</a>' for t in topics)))
-    facts.append(("Status", "Read" if row.get("is_read") else "Unread"))
+    facts.append(("Status", "Read" if row.get("is_read") else _progress_label(row) or "Unread"))
     if row.get("discovered_at"):
         facts.append(("Added", escape(short_date(row["discovered_at"]))))
     host = _host(row["url"])
@@ -94,6 +94,29 @@ def export_article(db, url):
     return f"# {row['title']}\n\nSource: {url}\n\nPublished: {row['published_at']}\n\n{tag_line}## Notes\n\n{notes}\n\n{highlights}{indicators}## Article\n\n{row['content_markdown'] or row['content_text'] or ''}\n"
 
 
+def _in_progress(row):
+    from .reading_state import is_in_progress
+
+    return is_in_progress(
+        row.get("is_read"),
+        row.get("position_fraction"),
+        has_notes(row["notes"], row["notes_format"]),
+        json.loads(row.get("highlights_json") or "[]"),
+    )
+
+
+def _progress_label(row):
+    """"In progress · 35%", or None when the article hasn't been started or is already read."""
+    if not _in_progress(row):
+        return None
+    fraction = row.get("position_fraction") or 0
+    return f"In progress · {round(fraction * 100)}%" if fraction else "In progress"
+
+
+def _last_touched(row):
+    return max(row.get("position_updated_at") or "", row.get("notes_updated_at") or "")
+
+
 def _row_tags(names):
     """Enough to recognize a row by, without every tag competing with the title."""
     shown = "".join(f'<span class="lib-row-tag">{escape(name)}</span>' for name in names[:2])
@@ -101,9 +124,33 @@ def _row_tags(names):
     return f'<span class="lib-row-tags">{shown}{more}</span>' if names else '<span class="lib-row-tags" hidden></span>'
 
 
-def render_library(db, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None, kind=""):
-    rows = library_rows(db)
-    return render_library_rows(rows, query, notes_only, selected, csrf_token, tag, storage, kind)
+DEFAULT_PAGE_SIZE = 100
+
+
+def fts_match_urls(db, query):
+    """Use the SQLite FTS5 trigram index to narrow candidate URLs in O(log N) for terms of 3+ chars."""
+    import sqlite3
+
+    terms = [term for term in (query or "").split() if len(term) >= 3]
+    if not terms:
+        return None
+    match_expr = " ".join('"' + term.replace('"', '""') + '"' for term in terms)
+    try:
+        return {
+            row[0]
+            for row in db.execute(
+                "SELECT url FROM articles_fts WHERE articles_fts MATCH ?",
+                (match_expr,),
+            )
+        }
+    except sqlite3.OperationalError:
+        return None
+
+
+def render_library(db, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None, kind="", progress=False, page=1, page_size=DEFAULT_PAGE_SIZE):
+    rows = library_rows(db, selected=selected)
+    fts_urls = fts_match_urls(db, query) if query else None
+    return render_library_rows(rows, query, notes_only, selected, csrf_token, tag, storage, kind, progress, page=page, page_size=page_size, fts_urls=fts_urls)
 
 
 def _folder_bytes(folder):
@@ -135,12 +182,31 @@ def library_summary(total, storage):
     return text
 
 
-def library_rows(db):
-    """Read private library records at the backend boundary."""
+def library_rows(db, selected=""):
+    """Read private library records at the backend boundary without serializing full HTML/Markdown for every row."""
+    target = selected
+    if not target:
+        first = db.execute(
+            "SELECT a.url FROM articles a JOIN sources s ON s.id=a.source_id ORDER BY julianday(a.published_at) DESC,a.title COLLATE NOCASE,a.url LIMIT 1"
+        ).fetchone()
+        target = first[0] if first else ""
     return [
         dict(row)
         for row in db.execute(
-            "SELECT a.*,s.name AS publisher,(SELECT json_group_array(h.quote) FROM (SELECT quote FROM article_highlights WHERE article_url=a.url ORDER BY created_at,id) h) AS highlights_json,(SELECT json_group_array(t.tag) FROM (SELECT tag FROM article_tags WHERE article_url=a.url ORDER BY tag COLLATE NOCASE) t) AS tags_json,(SELECT json_group_array(json_object('id',p.id,'name',p.name)) FROM (SELECT tp.id,tp.name FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=a.url ORDER BY tp.name COLLATE NOCASE) p) AS topics_json FROM articles a JOIN sources s ON s.id=a.source_id ORDER BY julianday(a.published_at) DESC,a.title COLLATE NOCASE,a.url"
+            """SELECT a.url,a.source_id,a.title,a.published_at,a.author,a.content_text,a.content_status,
+            a.discovered_at,a.content_format,a.media_json,a.is_read,a.notes,a.notes_format,a.notes_updated_at,
+            a.notes_revision,a.triage,
+            CASE WHEN a.url=? THEN a.content_html END AS content_html,
+            CASE WHEN a.url=? THEN a.content_markdown END AS content_markdown,
+            instr(coalesce(a.content_markdown,''), char(10)||char(10)||'## Transcript'||char(10))>0 AS has_transcript,
+            s.name AS publisher,
+            (SELECT json_group_array(h.quote) FROM (SELECT quote FROM article_highlights WHERE article_url=a.url ORDER BY created_at,id) h) AS highlights_json,
+            (SELECT json_group_array(t.tag) FROM (SELECT tag FROM article_tags WHERE article_url=a.url ORDER BY tag COLLATE NOCASE) t) AS tags_json,
+            (SELECT json_group_array(json_object('id',p.id,'name',p.name)) FROM (SELECT tp.id,tp.name FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=a.url ORDER BY tp.name COLLATE NOCASE) p) AS topics_json,
+            rp.fraction AS position_fraction,rp.updated_at AS position_updated_at
+            FROM articles a JOIN sources s ON s.id=a.source_id LEFT JOIN reading_positions rp ON rp.article_url=a.url
+            ORDER BY julianday(a.published_at) DESC,a.title COLLATE NOCASE,a.url""",
+            (target, target),
         )
     ]
 
@@ -149,31 +215,56 @@ def _kind(row):
     return format_label(row["content_format"], row["publisher"])
 
 
-def render_library_rows(rows, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None, kind=""):
+def render_library_rows(rows, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None, kind="", progress=False, page=1, page_size=DEFAULT_PAGE_SIZE, fts_urls=None):
     """Render a library from backend JSON without opening a database."""
     from .sessions import clean_notes
 
+    progress = progress and not notes_only
     terms = query.casefold().split()
     matches = []
     counts = {}
     kinds = {}
+    parsed_tags = {}
+    parsed_quotes = {}
+    parsed_notes = {}
+    noted_urls = set()
+    started = set()
+    from .reading_state import is_in_progress
+
     for row in rows:
+        url = row["url"]
         kinds[_kind(row)] = kinds.get(_kind(row), 0) + 1
-        for name in json.loads(row.get("tags_json") or "[]"):
+        tags = json.loads(row.get("tags_json") or "[]")
+        quotes = json.loads(row.get("highlights_json") or "[]")
+        notes_plain = (
+            BeautifulSoup(row["notes"] or "", "html.parser").get_text(" ", strip=True)
+            if row["notes_format"] == "html"
+            else (row["notes"] or "")
+        )
+        noted = bool(notes_plain.replace("\u200b", "").strip())
+        parsed_tags[url] = tags
+        parsed_quotes[url] = quotes
+        parsed_notes[url] = notes_plain
+        if noted:
+            noted_urls.add(url)
+        if is_in_progress(row.get("is_read"), row.get("position_fraction"), noted, quotes):
+            started.add(url)
+        for name in tags:
             counts[name] = counts.get(name, 0) + 1
     for row in rows:
-        tags = json.loads(row.get("tags_json") or "[]")
+        url = row["url"]
+        if fts_urls is not None and url not in fts_urls:
+            continue
+        tags = parsed_tags[url]
         if tag and tag.casefold() not in {name.casefold() for name in tags}:
             continue
         if kind and _kind(row).casefold() != kind.casefold():
             continue
-        notes = (
-            BeautifulSoup(row["notes"], "html.parser").get_text(" ", strip=True)
-            if row["notes_format"] == "html"
-            else row["notes"]
-        )
-        quotes = json.loads(row.get("highlights_json") or "[]")
-        if notes_only and not has_notes(row["notes"], row["notes_format"]) and not quotes:
+        notes = parsed_notes[url]
+        quotes = parsed_quotes[url]
+        if notes_only and url not in noted_urls and not quotes:
+            continue
+        if progress and url not in started:
             continue
         if all(
             term
@@ -183,27 +274,45 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             for term in terms
         ):
             matches.append(row)
+    if progress:
+        # Most recently read or noted first, so the article you just left is on top.
+        matches.sort(key=_last_touched, reverse=True)
+    total_matches = len(matches)
+    per_page = max(1, int(page_size)) if page_size else total_matches or 1
+    total_pages = max(1, (total_matches + per_page - 1) // per_page)
+    try:
+        current_page = max(1, min(int(page), total_pages))
+    except (TypeError, ValueError):
+        current_page = 1
+    visible = matches[(current_page - 1) * per_page : current_page * per_page]
     active = next(
-        (r for r in matches if r["url"] == selected), matches[0] if matches else None
+        (r for r in matches if r["url"] == selected), visible[0] if visible else None
     )
 
     def link(**kwargs):
-        return escape(
-            "/library?"
-            + urlencode(dict(dict(q=query, notes="1" if notes_only else "0", tag=tag, type=kind), **kwargs)),
-            quote=True,
-        )
+        base = dict(q=query, notes="1" if notes_only else "0", progress="1" if progress else "0", tag=tag, type=kind)
+        if current_page > 1 and "page" not in kwargs:
+            base["page"] = str(current_page)
+        params = dict(base, **kwargs)
+        if params.get("page") in {"1", 1, "", None}:
+            params.pop("page", None)
+        return escape("/library?" + urlencode(params), quote=True)
 
     items = []
-    for row in matches:
+    for row in visible:
         is_active = active["url"] == row["url"]
+        fraction = row.get("position_fraction") or 0
         badges = (
             render_template("library/read-badge.html")
             if row["is_read"]
+            else f'<span class="lib-progress">{round(fraction * 100)}% read</span>'
+            if row["url"] in started and fraction >= 0.02
+            else '<span class="lib-progress">Started</span>'
+            if row["url"] in started
             else ""
         ) + (
             render_template("library/noted-badge.html")
-            if has_notes(row["notes"], row["notes_format"])
+            if row["url"] in noted_urls
             else ""
         )
         items.append(
@@ -218,7 +327,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
                 format_class=label.lower(),
                 published_date=escape(short_date(row["published_at"])),
                 badges=badges,
-                tags=_row_tags(json.loads(row.get("tags_json") or "[]")),
+                tags=_row_tags(parsed_tags[row["url"]]),
             )
         )
     detail = render_template("library/empty.html")
@@ -228,8 +337,8 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             if active["notes_format"] == "html"
             else "<p>" + escape(active["notes"]).replace("\n", "<br>") + "</p>"
         )
-        quotes = json.loads(active.get("highlights_json") or "[]")
-        if not has_notes(active["notes"], active["notes_format"]):
+        quotes = parsed_quotes[active["url"]]
+        if active["url"] not in noted_urls:
             notes = "" if quotes else render_template("library/no-notes.html")
         if quotes:
             notes += '<h3 class="lib-highlights-heading">Highlights</h3>' + "".join(
@@ -256,8 +365,14 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             notes=notes,
             details=resource_details(active),
         )
-    all_link = link(notes="0")
-    notes_link = link(notes="1")
+    all_link = link(notes="0", progress="0", page="1")
+    notes_link = link(notes="1", progress="0", page="1")
+    progress_link = link(notes="0", progress="1", page="1")
+    pagination = ""
+    if total_pages > 1:
+        prev_link = f'<a href="{link(page=str(current_page - 1))}">← Previous</a>' if current_page > 1 else '<span class="muted">← Previous</span>'
+        next_link = f'<a href="{link(page=str(current_page + 1))}">Next →</a>' if current_page < total_pages else '<span class="muted">Next →</span>'
+        pagination = f'<nav class="lib-pagination" aria-label="Library pages">{prev_link}<span class="muted">Page {current_page} of {total_pages}</span>{next_link}</nav>'
     # Selecting the active tag again clears the filter.
     tag_links = "".join(
         f'<a class="lib-tag-option{" active" if name.casefold() == tag.casefold() else ""}" '
@@ -297,11 +412,21 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
         tag_filter=tag_filter,
         kind=escape(kind, quote=True),
         kind_filter=kind_filter,
-        all_tab_class="active" if not notes_only else "",
+        progress_filter="1" if progress else "0",
+        all_tab_class="active" if not notes_only and not progress else "",
         all_link=all_link,
         notes_tab_class="active" if notes_only else "",
         notes_link=notes_link,
+        progress_tab_class="active" if progress else "",
+        progress_link=progress_link,
+        progress_count=len(started),
         library_summary=escape(library_summary(len(rows), storage)),
-        article_rows="".join(items) or '<p class="muted">No results</p>',
+        article_rows="".join(items)
+        or (
+            '<p class="muted">Nothing in progress. Articles you start reading, note or highlight show up here until you mark them read.</p>'
+            if progress and not terms and not tag and not kind
+            else '<p class="muted">No results</p>'
+        ),
+        pagination=pagination,
         detail=detail,
     )

@@ -16,35 +16,17 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import httpx
 
 from .guest_routes import guest_option
+from .http_common import (
+    SHARED_STATIC_FILES as STATIC_FILES,
+    build_csp,
+    is_safe_proxy_path,
+    post_size_limit,
+    send_security_headers,
+)
 from .net_safety import BoundedHTTPServer, client_address, env_flag, forwarded_https, trusted_proxies
 from .templates import SETUP_FIELD, UI_ROOT, load_template, render_template
 
-STATIC_FILES = {
-    "/reader.css": ("shared/styles.css", "text/css; charset=utf-8"),
-    "/reader.js": ("workspace/workspace.js", "text/javascript; charset=utf-8"),
-    "/focus.js": ("workspace/focus.js", "text/javascript; charset=utf-8"),
-    "/math.js": ("workspace/math.js", "text/javascript; charset=utf-8"),
-    "/library.js": ("library/library.js", "text/javascript; charset=utf-8"),
-    "/notes-editor.js": ("shared/notes-editor.js", "text/javascript; charset=utf-8"),
-    "/tag-editor.js": ("shared/tag-editor.js", "text/javascript; charset=utf-8"),
-    "/topics.js": ("topics/topics.js", "text/javascript; charset=utf-8"),
-    "/account.js": ("auth/account.js", "text/javascript; charset=utf-8"),
-    "/sources.js": ("sources/sources.js", "text/javascript; charset=utf-8"),
-    "/vendor/katex/katex.min.js": (
-        "vendor/katex/katex.min.js",
-        "text/javascript; charset=utf-8",
-    ),
-    "/vendor/katex/auto-render.min.js": (
-        "vendor/katex/auto-render.min.js",
-        "text/javascript; charset=utf-8",
-    ),
-}
-CSP = (
-    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-    "img-src 'self' https: http:; media-src 'self' https: http:; "
-    "frame-src https://www.youtube-nocookie.com https://player.vimeo.com; "
-    "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
-)
+CSP = build_csp(include_pwa=False, ancestors="'none'")
 FORWARDED_HEADERS = (
     "Cookie",
     "Content-Type",
@@ -88,6 +70,10 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
     proxies = trusted_proxies()
     secure_cookies = env_flag("INTEL_SECURE_COOKIES")
     upload_slots = threading.BoundedSemaphore(2)
+
+    def backend_client(timeout):
+        """Fresh Client per request prevents cross-user cookie jars and concurrent transport close races."""
+        return httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False)
 
     class ViewerHandler(BaseHTTPRequestHandler):
         timeout = 30
@@ -133,11 +119,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
             self.wfile.write(body)
 
         def security_headers(self):
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Security-Policy", CSP)
-            self.send_header("X-Content-Type-Options", "nosniff")
-            if self.over_https():
-                self.send_header("Strict-Transport-Security", "max-age=31536000")
+            send_security_headers(self, csp=CSP, over_https=self.over_https())
 
         def redirect(self, location):
             self.reply(status=303, headers=[("Location", location)])
@@ -149,7 +131,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
 
         def may_upload(self):
             """Upload slots are scarce, so strangers must not be able to hold them with slow requests."""
-            with httpx.Client(timeout=30, trust_env=False, follow_redirects=False) as client:
+            with backend_client(30) as client:
                 response = client.get(
                     backend_url + "/api/viewer-session", headers=self.upstream_headers()
                 )
@@ -160,17 +142,16 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
             return bool(response.json().get("user"))
 
         def model(self, path):
-            # A fresh client prevents a pooled cookie jar from mixing users.
-            with httpx.Client(
-                timeout=30, trust_env=False, follow_redirects=False
-            ) as client:
+            with backend_client(30) as client:
                 response = client.get(
                     backend_url + path, headers=self.upstream_headers()
                 )
-            self.session_cookies = [
+            cookies = getattr(self, "session_cookies", [])
+            cookies.extend(
                 ("Set-Cookie", value)
                 for value in response.headers.get_list("set-cookie")
-            ]
+            )
+            self.session_cookies = cookies
             if response.status_code == 401:
                 self.redirect("/login")
                 return None
@@ -319,18 +300,30 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
             if path == "/library":
                 from .library import render_library_rows
 
-                data = self.model("/api/library")
+                selected = params.get("selected", [""])[0]
+                q = params.get("q", [""])[0]
+                query_args = {}
+                if selected:
+                    query_args["selected"] = selected
+                if q:
+                    query_args["q"] = q
+                api_path = "/api/library?" + urlencode(query_args) if query_args else "/api/library"
+                data = self.model(api_path)
                 if data is None:
                     return
+                fts_urls = set(data["fts_urls"]) if "fts_urls" in data and data["fts_urls"] is not None else None
                 html = render_library_rows(
                     data["articles"],
-                    params.get("q", [""])[0],
+                    q,
                     params.get("notes", [""])[0] == "1",
-                    params.get("selected", [""])[0],
+                    selected,
                     session["csrf_token"],
                     params.get("tag", [""])[0],
                     data.get("storage"),
                     params.get("type", [""])[0],
+                    params.get("progress", [""])[0] == "1",
+                    page=params.get("page", ["1"])[0],
+                    fts_urls=fts_urls,
                 )
             elif path == "/topics":
                 from .topics import render_topics
@@ -387,15 +380,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
             body = None
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                limit = (
-                    100_000_000
-                    if path in {"/api/file-upload", "/api/transcript-audio"}
-                    else 20_000_000
-                    if path == "/api/pdf-upload"
-                    else 8192
-                    if path.startswith("/auth/")
-                    else 1_000_000
-                )
+                limit = post_size_limit(path)
                 if not 0 < length <= limit or "Transfer-Encoding" in self.headers:
                     self.json_error("Invalid request size", 413)
                     return
@@ -419,13 +404,11 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                     upload_slots.release()
 
         def proxy(self, method, body=None):
-            if not self.path.startswith("/") or self.path.startswith("//"):
+            if not is_safe_proxy_path(self.path):
                 self.reply("Invalid path", 400)
                 return
             with (
-                httpx.Client(
-                    timeout=300, trust_env=False, follow_redirects=False
-                ) as client,
+                backend_client(300) as client,
                 client.stream(
                     method,
                     backend_url + self.path,

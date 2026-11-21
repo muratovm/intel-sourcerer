@@ -2755,6 +2755,14 @@ audio.article-media { width:100%; height:54px; }
 .notes-pane { background: var(--ground); }
 #notes ul, #notes ol { margin: 6px 0; padding-left: 24px; }
 #notes li { margin: 2px 0; }
+/* Nested levels cycle disc → circle → square (and 1 → a → i), as in a word processor. */
+#notes li > ul, #notes li > ol, .lib-note-content li > ul, .lib-note-content li > ol { margin: 2px 0; }
+#notes ul ul, .lib-note-content ul ul { list-style-type: circle; }
+#notes ul ul ul, .lib-note-content ul ul ul { list-style-type: square; }
+#notes ul ul ul ul, .lib-note-content ul ul ul ul { list-style-type: disc; }
+#notes ol ol, .lib-note-content ol ol { list-style-type: lower-alpha; }
+#notes ol ol ol, .lib-note-content ol ol ol { list-style-type: lower-roman; }
+#notes ul.checklist ul.checklist, .lib-note-content ul.checklist ul.checklist { padding-left: 0; margin-left: 26px; }
 #notes a, .lib-note-content a { color: var(--hex-1d55d6); text-decoration: underline; }
 #notes code, .lib-note-content code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -3523,3 +3531,10 @@ h3.stat-title + .stat-bars { margin-top: 10px; }
 #notes table, .lib-note-content table { width: 100%; margin: 10px 0; border-collapse: collapse; font-size: 0.95em; }
 #notes th, #notes td, .lib-note-content th, .lib-note-content td { min-width: 3em; padding: 5px 8px; border: 1px solid var(--hex-c6d1e2); text-align: left; vertical-align: top; }
 #notes th, .lib-note-content th { background: var(--ground); font-weight: 600; }
+
+/* In progress: started, noted or highlighted, and not yet marked read. */
+.lib-tabs .lib-tab-count { margin-left: 4px; color: var(--muted); font-weight: 400; }
+.lib-meta .lib-progress { color: var(--hex-08734c); font-size: 13px; }
+.lib-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; font-size: 13px; color: var(--muted); }
+.lib-pagination a { color: var(--ink); font-weight: 500; text-decoration: none; }
+.lib-pagination a:hover { text-decoration: underline; }

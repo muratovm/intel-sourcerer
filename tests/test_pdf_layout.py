@@ -1,4 +1,3 @@
-from io import BytesIO
 import pymupdf
 from intel_sourcerer.pdf_layout import extract_layout
 from intel_sourcerer.content import render_markdown, re_asset_url

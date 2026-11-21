@@ -387,7 +387,6 @@ def test_one_remote_client_cannot_take_every_slot(monkeypatch):
 
 
 def test_silent_clients_are_dropped(run_server, monkeypatch):
-    import intel_sourcerer.web as web
     client, server = run_server()
     handler = server.RequestHandlerClass
     assert handler.timeout == 30

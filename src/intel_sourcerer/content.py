@@ -174,6 +174,8 @@ def extract_markdown(html, url):
 
 def extract_article(html, url):
     """Return (clean HTML, Markdown, media); text in the HTML is never reinterpreted."""
+    import uuid
+
     def math_span(soup, tex, display):
         span = soup.new_tag('span', attrs={'class': 'article-math', 'data-tex': tex})
         if display:
@@ -181,9 +183,20 @@ def extract_article(html, url):
         span.string = tex
         return span
 
-    _, root, _ = prepare_article(html, url, math_span)
-    markdown, media = extract_markdown(html, url)
-    return clean_article_html(root), markdown, media
+    _, root, media = prepare_article(html, url, math_span)
+    clean_html = clean_article_html(root)
+    tokens = {}
+    prefix = 'ARXIVMATH' + uuid.uuid4().hex
+    md_soup = BeautifulSoup(clean_html, 'html.parser')
+    for span in list(md_soup.select('span.article-math[data-tex]')):
+        key = prefix + str(len(tokens))
+        tex = span['data-tex']
+        tokens[key] = ('\n\n$$' + tex + '$$\n\n') if span.get('data-display') == 'true' else '$' + tex + '$'
+        span.replace_with(md_soup.new_string(key))
+    markdown = markdownify(str(md_soup), heading_style='ATX', bullets='-', strip=['div', 'span']).strip()
+    for key, value in tokens.items():
+        markdown = markdown.replace(key, value)
+    return clean_html, markdown, media
 
 
 def normalize_latexml(root, soup):
@@ -276,12 +289,21 @@ def clean_article_html(root):
     return str(soup)
 
 
+def render_article_soup(html):
+    """Prepare stored clean HTML as a BeautifulSoup tree in a single parse pass."""
+    soup = BeautifulSoup(sanitize_article_html(html), 'html.parser')
+    research_sections_soup(soup)
+    link_plain_urls_soup(soup)
+    return soup
+
+
 def render_article_html(html):
     """Prepare stored clean HTML for display; no Markdown or TeX parsing happens here."""
-    return link_plain_urls(research_sections(sanitize_article_html(html)))
+    return str(render_article_soup(html))
 
 
-def render_markdown(text):
+def render_markdown_soup(text):
+    """Render Markdown to a sanitized BeautifulSoup tree in a single parse pass."""
     renderer = MarkdownIt('commonmark', {'html':False}).enable('table')
     import re
     import uuid
@@ -302,8 +324,14 @@ def render_markdown(text):
         html = html.replace(token, equation)
     clean = bleach.clean(html, tags=['p','br','h1','h2','h3','h4','h5','h6','ul','ol','li','blockquote','strong','em','a','pre','code','hr','table','thead','tbody','tr','th','td','s'],
         attributes={'a':['href','title'], 'ol':['start'], 'th':['align'], 'td':['align']}, protocols=['http','https','mailto'], strip=True)
+    soup = BeautifulSoup(clean, 'html.parser')
+    research_sections_soup(soup)
+    link_plain_urls_soup(soup)
+    return soup
 
-    return link_plain_urls(research_sections(clean))
+
+def render_markdown(text):
+    return str(render_markdown_soup(text))
 
 
 def repair_linked_placeholders(text):
@@ -390,10 +418,9 @@ def remove_with_empty_parents(tag):
         parent = next_parent
 
 
-def research_sections(html):
-    """Collapse recognized research sections after sanitizing their contents."""
+def research_sections_soup(soup):
+    """Collapse recognized research sections in place on an already-parsed soup."""
     import re
-    soup = BeautifulSoup(html, 'html.parser')
     for heading in list(soup.find_all(['h1', 'h2', 'h3'])):
         name = re.sub(r'^(?:\d+(?:\.\d+)*\.?|[IVXLCDM]+\.)\s+', '', heading.get_text(' ', strip=True)).lower()
         if name not in {'abstract', 'authors & publication details', 'references', 'bibliography', 'works cited'}:
@@ -416,22 +443,27 @@ def research_sections(html):
             next_sibling = sibling.next_sibling
             details.append(sibling.extract())
             sibling = next_sibling
-    return str(soup)
+    return soup
+
+
+def research_sections(html):
+    """Collapse recognized research sections after sanitizing their contents."""
+    return str(research_sections_soup(BeautifulSoup(html, 'html.parser')))
 
 
 def reading_word_count(markdown, fallback='', html=None):
-    rendered = render_article_html(html) if html else render_markdown(markdown) if markdown else ''
-    soup = BeautifulSoup(rendered, 'html.parser')
+    soup = render_article_soup(html) if html else render_markdown_soup(markdown) if markdown else None
+    if soup is None:
+        return len(fallback.split())
     arrange_media(soup)
     for node in soup.select('[data-reading-exclude], figure, video, iframe'):
         node.decompose()
-    return len((soup.get_text(' ', strip=True) if rendered else fallback).split())
+    return len(soup.get_text(' ', strip=True).split())
 
 
-def link_plain_urls(html):
-    """Turn explicit web URLs into links without touching existing links or code."""
+def link_plain_urls_soup(soup):
+    """Turn explicit web URLs into links in place without touching existing links or code."""
     import re
-    soup = BeautifulSoup(html, 'html.parser')
     pattern = re.compile(r"https?://[^\s<>]+", re.I)
     for node in list(soup.find_all(string=True)):
         if not node.find_parent(['code', 'pre']):
@@ -469,7 +501,12 @@ def link_plain_urls(html):
         if parts and parts.scheme in {'http', 'https'}:
             anchor['target'] = '_blank'
             anchor['rel'] = 'noopener noreferrer'
-    return str(soup)
+    return soup
+
+
+def link_plain_urls(html):
+    """Turn explicit web URLs into links without touching existing links or code."""
+    return str(link_plain_urls_soup(BeautifulSoup(html, 'html.parser')))
 
 
 def re_asset_url(value):

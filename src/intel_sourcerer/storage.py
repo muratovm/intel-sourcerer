@@ -11,6 +11,7 @@ def use_write_ahead_log(db):
     """Let readers keep working during a write. The mode is stored in the file, so this sticks."""
     try:
         db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA synchronous=NORMAL")
     except sqlite3.OperationalError:
         # Another connection is mid-write; the next open tries again, and the old mode still works.
         pass
@@ -34,6 +35,7 @@ def connect_database(path):
       fetch_error TEXT, relevance_reason TEXT NOT NULL, discovered_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS articles_publication ON articles(published_at);
+    CREATE INDEX IF NOT EXISTS articles_source_pub ON articles(source_id, published_at);
     CREATE TABLE IF NOT EXISTS import_runs (
       id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, since TEXT NOT NULL,
       until TEXT NOT NULL, report_json TEXT NOT NULL
@@ -63,9 +65,11 @@ def connect_database(path):
       finished INTEGER NOT NULL DEFAULT 0 CHECK(finished IN (0,1)));
     CREATE TABLE IF NOT EXISTS queue_items (
       queue_id TEXT NOT NULL REFERENCES reading_queues(id),position INTEGER NOT NULL,
-      article_url TEXT NOT NULL REFERENCES articles(url),PRIMARY KEY(queue_id,position),UNIQUE(queue_id,article_url));''')
+      article_url TEXT NOT NULL REFERENCES articles(url),PRIMARY KEY(queue_id,position),UNIQUE(queue_id,article_url));
+    CREATE INDEX IF NOT EXISTS queue_items_article ON queue_items(article_url);''')
     db.executescript("""CREATE TABLE IF NOT EXISTS article_reads (
       article_url TEXT PRIMARY KEY REFERENCES articles(url),read_at TEXT);
+    CREATE INDEX IF NOT EXISTS article_reads_read_at ON article_reads(read_at);
     INSERT OR IGNORE INTO article_reads(article_url,read_at) SELECT url,NULL FROM articles WHERE is_read=1;
     CREATE TRIGGER IF NOT EXISTS record_first_article_read AFTER UPDATE OF is_read ON articles
       WHEN NEW.is_read=1 AND OLD.is_read=0
@@ -77,7 +81,9 @@ def connect_database(path):
       estimated_seconds INTEGER NOT NULL, elapsed_seconds REAL NOT NULL DEFAULT 0,
       started_at TEXT NOT NULL, resumed_at TEXT, finished_at TEXT,
       status TEXT NOT NULL CHECK(status IN ('running','paused','completed','abandoned'))
-    );""")
+    );
+    CREATE INDEX IF NOT EXISTS timed_sessions_status ON timed_reading_sessions(status);
+    CREATE INDEX IF NOT EXISTS timed_sessions_article ON timed_reading_sessions(article_url);""")
     if 'triage' not in columns:
         db.execute("ALTER TABLE articles ADD COLUMN triage TEXT CHECK (triage IN ('keep','skip'))")
     db.executescript("""CREATE TABLE IF NOT EXISTS article_highlights (
@@ -125,8 +131,11 @@ def connect_database(path):
     """)
     db.executescript("""CREATE TABLE IF NOT EXISTS source_fetch_state (
       source_id TEXT PRIMARY KEY, etag TEXT, last_modified TEXT, covered_since TEXT,
-      paused_until TEXT, pause_reason TEXT
+      paused_until TEXT, pause_reason TEXT, pages_blocked_until TEXT
     );""")
+    fetch_columns = {row[1] for row in db.execute('PRAGMA table_info(source_fetch_state)')}
+    if 'pages_blocked_until' not in fetch_columns:
+        db.execute('ALTER TABLE source_fetch_state ADD COLUMN pages_blocked_until TEXT')
     # Rebuilt from article text on demand. Triggers keep it honest for every path that writes articles.
     db.executescript("""CREATE TABLE IF NOT EXISTS article_indicators (
       article_url TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL,
@@ -148,8 +157,86 @@ def connect_database(path):
         DELETE FROM indicator_index_state WHERE article_url=OLD.url;
       END;
     """)
+    _ensure_fts_index(db)
     db.commit()
     return db
+
+
+def _ensure_fts_index(db):
+    """Create and synchronize an FTS5 trigram index for fast substring search across articles, notes, highlights, and tags."""
+    try:
+        db.executescript("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
+          url UNINDEXED,
+          title,
+          publisher,
+          content_text,
+          notes,
+          highlights,
+          tags,
+          tokenize='trigram'
+        );
+        CREATE TRIGGER IF NOT EXISTS articles_fts_ai AFTER INSERT ON articles BEGIN
+          INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
+          SELECT NEW.url, NEW.title, coalesce((SELECT name FROM sources WHERE id=NEW.source_id), ''),
+                 coalesce(NEW.content_text, ''), coalesce(NEW.notes, ''), '', '';
+        END;
+        CREATE TRIGGER IF NOT EXISTS articles_fts_au AFTER UPDATE OF title,content_text,notes,source_id ON articles BEGIN
+          DELETE FROM articles_fts WHERE url=OLD.url;
+          INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
+          SELECT NEW.url, NEW.title, coalesce((SELECT name FROM sources WHERE id=NEW.source_id), ''),
+                 coalesce(NEW.content_text, ''), coalesce(NEW.notes, ''),
+                 coalesce((SELECT group_concat(quote, ' ') FROM article_highlights WHERE article_url=NEW.url), ''),
+                 coalesce((SELECT group_concat(tag, ' ') FROM article_tags WHERE article_url=NEW.url), '');
+        END;
+        CREATE TRIGGER IF NOT EXISTS articles_fts_ad AFTER DELETE ON articles BEGIN
+          DELETE FROM articles_fts WHERE url=OLD.url;
+        END;
+        CREATE TRIGGER IF NOT EXISTS articles_fts_tag_ai AFTER INSERT ON article_tags BEGIN
+          DELETE FROM articles_fts WHERE url=NEW.article_url;
+          INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
+          SELECT a.url, a.title, coalesce(s.name, ''), coalesce(a.content_text, ''), coalesce(a.notes, ''),
+                 coalesce((SELECT group_concat(quote, ' ') FROM article_highlights WHERE article_url=a.url), ''),
+                 coalesce((SELECT group_concat(tag, ' ') FROM article_tags WHERE article_url=a.url), '')
+          FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.url=NEW.article_url;
+        END;
+        CREATE TRIGGER IF NOT EXISTS articles_fts_tag_ad AFTER DELETE ON article_tags BEGIN
+          DELETE FROM articles_fts WHERE url=OLD.article_url;
+          INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
+          SELECT a.url, a.title, coalesce(s.name, ''), coalesce(a.content_text, ''), coalesce(a.notes, ''),
+                 coalesce((SELECT group_concat(quote, ' ') FROM article_highlights WHERE article_url=a.url), ''),
+                 coalesce((SELECT group_concat(tag, ' ') FROM article_tags WHERE article_url=a.url), '')
+          FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.url=OLD.article_url;
+        END;
+        CREATE TRIGGER IF NOT EXISTS articles_fts_hl_ai AFTER INSERT ON article_highlights BEGIN
+          DELETE FROM articles_fts WHERE url=NEW.article_url;
+          INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
+          SELECT a.url, a.title, coalesce(s.name, ''), coalesce(a.content_text, ''), coalesce(a.notes, ''),
+                 coalesce((SELECT group_concat(quote, ' ') FROM article_highlights WHERE article_url=a.url), ''),
+                 coalesce((SELECT group_concat(tag, ' ') FROM article_tags WHERE article_url=a.url), '')
+          FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.url=NEW.article_url;
+        END;
+        CREATE TRIGGER IF NOT EXISTS articles_fts_hl_ad AFTER DELETE ON article_highlights BEGIN
+          DELETE FROM articles_fts WHERE url=OLD.article_url;
+          INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
+          SELECT a.url, a.title, coalesce(s.name, ''), coalesce(a.content_text, ''), coalesce(a.notes, ''),
+                 coalesce((SELECT group_concat(quote, ' ') FROM article_highlights WHERE article_url=a.url), ''),
+                 coalesce((SELECT group_concat(tag, ' ') FROM article_tags WHERE article_url=a.url), '')
+          FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.url=OLD.article_url;
+        END;
+        """)
+        # Backfill any existing articles created before FTS5 was enabled.
+        db.execute("""
+        INSERT INTO articles_fts(url,title,publisher,content_text,notes,highlights,tags)
+        SELECT a.url, a.title, coalesce(s.name, ''), coalesce(a.content_text, ''), coalesce(a.notes, ''),
+               coalesce((SELECT group_concat(h.quote, ' ') FROM article_highlights h WHERE h.article_url=a.url), ''),
+               coalesce((SELECT group_concat(t.tag, ' ') FROM article_tags t WHERE t.article_url=a.url), '')
+        FROM articles a LEFT JOIN sources s ON s.id=a.source_id
+        WHERE a.url NOT IN (SELECT url FROM articles_fts)
+        """)
+    except sqlite3.OperationalError:
+        # SQLite builds without FTS5 fall back seamlessly to Python filtering.
+        pass
 
 
 def save_source(db, source):

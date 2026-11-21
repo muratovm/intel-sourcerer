@@ -24,6 +24,16 @@ async function api(path, data) {
   if (!response.ok) throw new Error(result.error || "Unable to save. Please try again.");
   return result;
 }
+async function runPlaylistJob(payload) {
+  const started = await api("/api/jobs/playlist", payload);
+  if (!started?.id) return started;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const job = await api("/api/jobs?" + new URLSearchParams({ id: started.id }));
+    if (job.state === "done") return job.result;
+    if (job.state === "failed") throw new Error(job.error || "Playlist import failed.");
+  }
+}
 function topicPage(id) {
   return "/topic?" + new URLSearchParams({ id });
 }
@@ -46,7 +56,7 @@ if (newTopicDialog) {
     $("new-topic-error").textContent = playlist ? "Importing the playlist. Reading a long playlist can take a minute…" : "";
     if (save) save.disabled = true;
     try {
-      const result = playlist ? await api("/api/link", { url: value }) : await api("/api/topics", { name: value });
+      const result = playlist ? await runPlaylistJob({ url: value }) : await api("/api/topics", { name: value });
       location.assign(topicPage(playlist ? result.topic : result.id));
     } catch (error) {
       $("new-topic-error").textContent = error.message;
@@ -287,7 +297,9 @@ if (page) {
       else {
         const playlist = /^https?:\/\/(www\.|m\.)?youtube\.com\/playlist\?/i.test(value);
         $("save-status").textContent = playlist ? "Importing the playlist…" : "Fetching article…";
-        const result = await api("/api/link", playlist ? { url: value, topic: topicId } : { url: value });
+        const result = playlist
+          ? await runPlaylistJob({ url: value, topic: topicId })
+          : await api("/api/link", { url: value });
         if (playlist) location.reload();
         else await addArticle(result.url);
       }

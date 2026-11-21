@@ -5,16 +5,17 @@ import json
 import uuid
 from datetime import UTC, datetime
 from html import escape
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 
-from .net_safety import public_only
+from .net_safety import BoundedHTTPServer, is_public_address, public_only, read_bounded_bytes
 from bs4 import BeautifulSoup
 
 from .content import arrange_media, extract_article, render_article_html, render_markdown
+from .http_common import send_security_headers
 from .templates import UI_ROOT, load_template
 from .viewer import CSP, STATIC_FILES
 
@@ -117,16 +118,14 @@ def load_article(value):
         if preferred:
             return preferred
         with public_only(httpx.Client(timeout=30, follow_redirects=True, trust_env=False)) as client:
-            response = client.get(value)
-            response.raise_for_status()
-            if len(response.content) > 20_000_000:
-                raise ValueError("Article exceeds 20 MB.")
-            data = response.content
-            url = str(response.url)
-            suffix = Path(urlsplit(url).path).suffix.lower()
-            pdf = "application/pdf" in response.headers.get(
-                "Content-Type", ""
-            ) or data.startswith(b"%PDF-")
+            with client.stream("GET", value) as response:
+                response.raise_for_status()
+                data = read_bounded_bytes(response, 20_000_000, "Article exceeds 20 MB.")
+                url = str(response.url)
+                suffix = Path(urlsplit(url).path).suffix.lower()
+                pdf = "application/pdf" in response.headers.get(
+                    "Content-Type", ""
+                ) or data.startswith(b"%PDF-")
     else:
         path = Path(value).expanduser().resolve()
         if path.stat().st_size > 20_000_000:
@@ -173,8 +172,8 @@ def temporary_page(session_id, guest=False):
         .replace("__TOKEN__", "temporary")
     )
     page = page.replace(
-        '<script src="/reader.js" defer>',
-        '<script src="/temporary.js" defer></script>\n    <script src="/reader.js" defer>',
+        '<script type="module" src="/reader.js"></script>',
+        '<script src="/temporary.js" defer></script>\n    <script type="module" src="/reader.js"></script>',
     )
     page = page.replace(
         "<body>",
@@ -191,19 +190,7 @@ def temporary_page(session_id, guest=False):
 
 
 def temporary_reader_script():
-    return (
-        (UI_ROOT / "workspace/workspace.js")
-        .read_text()
-        .replace("localStorage", "sessionStorage")
-        .replace(
-            '!["https:", "http:"].includes(source.protocol)',
-            '!["https:", "http:"].includes(source.protocol) || source.hostname === "temporary.invalid"',
-        )
-        .replace(
-            "else renderHome();",
-            'else { if (!sessionStorage.getItem(userStoragePrefix + "intel-queue-draft")) { draftQueue = state.queue.items.map(item => item.url); saveQueueDraft(); } renderSetup(); }',
-        )
-    )
+    return (UI_ROOT / "workspace/workspace.js").read_text()
 
 
 def create_temporary_viewer(articles, port=8767, host="127.0.0.1"):
@@ -246,9 +233,7 @@ def create_temporary_viewer(articles, port=8767, host="127.0.0.1"):
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Security-Policy", CSP)
-            self.send_header("X-Content-Type-Options", "nosniff")
+            send_security_headers(self, csp=CSP, over_https=False)
             self.end_headers()
             self.wfile.write(body)
 
@@ -273,16 +258,15 @@ def create_temporary_viewer(articles, port=8767, host="127.0.0.1"):
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            send_security_headers(self, csp=CSP, over_https=False)
             self.end_headers()
             self.wfile.write(body)
 
-    return ThreadingHTTPServer((host, port), Handler)
+    return BoundedHTTPServer((host, port), Handler)
 
 
 def public_link(value):
     """Guest URL imports may only address public HTTP(S) sites."""
-    import ipaddress
     import socket
 
     parsed = urlsplit(value)
@@ -300,7 +284,7 @@ def public_link(value):
         type=socket.SOCK_STREAM,
     )
     if not addresses or any(
-        not ipaddress.ip_address(item[4][0]).is_global for item in addresses
+        not is_public_address(item[4][0]) for item in addresses
     ):
         raise ValueError(
             "Temporary sessions cannot fetch private network or local URLs."
@@ -331,7 +315,10 @@ def load_public_article(value, *, prefer_arxiv=True):
                 if response.is_redirect:
                     from urllib.parse import urljoin
 
-                    value = urljoin(value, response.headers["location"])
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("Article redirect is missing a destination.")
+                    value = urljoin(value, location)
                     continue
                 response.raise_for_status()
                 data = bytearray()

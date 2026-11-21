@@ -1,11 +1,9 @@
 """Import dated cybersecurity articles from enabled AI-lab publishers."""
 import argparse
 import asyncio
-from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import json
 from math import ceil
-from pathlib import Path
 import re
 from urllib.parse import urljoin, urlsplit
 from zoneinfo import ZoneInfo
@@ -13,12 +11,13 @@ from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 import httpx
 
+from .http_common import display_timezone
 from .net_safety import public_only
 import trafilatura
 
 from .content import extract_article
 from .config import load_sources
-from .feeds import BOT_CHECK_PAUSE, Article, FeedCache, Refused, fetch_feed, polite_get
+from .feeds import Article, FeedCache, Refused, fetch_feed, polite_get
 from .storage import connect_database, save_article, save_source
 
 TERMS = re.compile(r"cyber|distillation|malicious|misuse|espionage|phishing|ransomware|vulnerabilit|prompt injection|hacking|frontier safeguards", re.I)
@@ -35,7 +34,11 @@ def try_again_label(seconds):
 
 def fetch_state(db, source_id):
     row = db.execute('SELECT * FROM source_fetch_state WHERE source_id=?', (source_id,)).fetchone()
-    return dict(row) if row else {'etag': None, 'last_modified': None, 'covered_since': None, 'paused_until': None, 'pause_reason': None}
+    if not row:
+        return {'etag': None, 'last_modified': None, 'covered_since': None, 'paused_until': None, 'pause_reason': None, 'pages_blocked_until': None}
+    state = dict(row)
+    state.setdefault('pages_blocked_until', None)
+    return state
 
 
 def save_fetch_state(db, source_id, **changes):
@@ -79,7 +82,7 @@ def listing_date(element):
                 pass
         else:
             return None
-    return published if published.tzinfo else published.replace(tzinfo=ZoneInfo('America/Toronto'))
+    return published if published.tzinfo else published.replace(tzinfo=display_timezone())
 
 
 def heading_links(container):
@@ -136,8 +139,6 @@ def listing_articles(html, source, page_url):
 
 # Enough words that the feed holds the post itself, not a teaser.
 FEED_TEXT_MIN_WORDS = 150
-# Sources whose article pages answered with a bot check, until when. The feed's own copy is used meanwhile.
-_pages_blocked_until = {}
 
 
 def feed_text(article):
@@ -197,7 +198,7 @@ async def import_articles(config, database, since, until):
                         except Refused as exc:
                             refused = exc.refusal
                             break
-                        except httpx.HTTPError as exc:
+                        except (httpx.HTTPError, ValueError) as exc:
                             report['errors'].append(f'{source.id}: {index}: {exc}')
                 else:
                     report['errors'].append(f'{source.id}: no listing adapter')
@@ -214,8 +215,10 @@ async def import_articles(config, database, since, until):
                 saved={row[0] for row in db.execute("SELECT url FROM articles WHERE source_id=? AND content_status='full_text' AND content_html IS NOT NULL",(source.id,))}
                 gate=asyncio.Semaphore(4)
                 refusals=[]
-                blocked=_pages_blocked_until.get(source.id)
-                if blocked and blocked<=now:_pages_blocked_until.pop(source.id,None);blocked=None
+                blocked = datetime.fromisoformat(state['pages_blocked_until']) if state['pages_blocked_until'] else None
+                if blocked and blocked <= now:
+                    save_fetch_state(db, source.id, pages_blocked_until=None)
+                    blocked = None
                 async def from_feed(article,reason,message):
                     copy=await asyncio.to_thread(feed_text,article)
                     if not copy:return article,reason,None,message,None,[],None
@@ -238,11 +241,11 @@ async def import_articles(config, database, since, until):
                         except Refused as exc:
                             refusals.append(exc.refusal)
                             return await from_feed(article,reason,exc.refusal.message)
-                        except httpx.HTTPError as exc:
+                        except (httpx.HTTPError, ValueError) as exc:
                             return article,reason,None,str(exc),None,[],None
                 extracted=await asyncio.gather(*(extract(i) for i in selected))
                 if refusals:
-                    _pages_blocked_until[source.id]=now+timedelta(seconds=refusals[0].pause_seconds)
+                    save_fetch_state(db, source.id, pages_blocked_until=(now + timedelta(seconds=refusals[0].pause_seconds)).isoformat())
                     # The feed itself still answers. When it supplied every blocked post, nothing is lost,
                     # so the source isn't paused and the next run still reads the feed.
                     if not any(error for _,_,_,error,*_ in extracted):refusals.clear()
@@ -252,8 +255,8 @@ async def import_articles(config, database, since, until):
                     stats['inserted']+=save_article(db,source.id,article,content=content,error=error,reason=reason,discovered_at=started,markdown=markdown,media=media,html=clean_html)
                     stats['already_saved' if article.url in saved else 'full_text' if content else 'metadata_only']+=1
                 if refused:
-                    until=datetime.now(timezone.utc)+timedelta(seconds=refused.pause_seconds)
-                    save_fetch_state(db,source.id,paused_until=until.isoformat(),pause_reason=refused.message)
+                    paused_until=datetime.now(timezone.utc)+timedelta(seconds=refused.pause_seconds)
+                    save_fetch_state(db,source.id,paused_until=paused_until.isoformat(),pause_reason=refused.message)
                     report['errors'].append(f'{source.name}: {refused.message}. {try_again_label(refused.pause_seconds)}')
                 elif result and not result.error:
                     failed=any(error for _,_,_,error,*_ in extracted)

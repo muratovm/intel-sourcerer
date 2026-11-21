@@ -221,7 +221,7 @@ See [`docs/`](docs/) for source notes, design screenshots, and earlier architect
 
 Databases use SQLite's write-ahead log, so recent writes can sit in a `-wal` file beside the database and reads continue during a write. Keep the data directory on a local disk, not a network share. To copy a running database, use `sqlite3 data/intel_sourcerer.sqlite3 ".backup copy.sqlite3"`, because copying the main file alone can miss recent changes.
 
-The web server creates one SQLite snapshot per UTC day in `data/backups/`, on startup or before the first note save that day. Existing daily snapshots are kept unchanged. These are daily recovery points, not continuous backups; later edits may not be in that day's snapshot. Snapshots stay local, are ignored by Git, and are not automatically pruned. Copy important snapshots to separate storage for protection against disk loss.
+The web server creates one SQLite snapshot per UTC day in `data/backups/`, on startup or before the first note save that day, keeping the three most recent daily snapshots (and leaving named snapshots untouched). Existing daily snapshots are kept unchanged. These are daily recovery points, not continuous backups; later edits may not be in that day's snapshot. Snapshots stay local and are ignored by Git. Copy important snapshots to separate storage for protection against disk loss.
 
 To restore a snapshot:
 

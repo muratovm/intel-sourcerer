@@ -79,3 +79,38 @@ def test_malformed_ipv6_links_do_not_break_rendering():
     html = render_article_html('<p>See http://[fe80::1 and <a href="http://[bad">this</a> and https://example.com/a.</p>')
     assert 'href="https://example.com/a"' in html and 'http://[fe80::1' in html
     assert safe_url('http://[bad', 'https://example.com/') is None
+
+
+def test_in_progress_tab_lists_started_unread_articles(tmp_path):
+    from intel_sourcerer.reading_state import in_progress_count, save_position, save_highlight
+
+    db=connect_database(tmp_path/'articles.sqlite3')
+    save_source(db,PublisherSource('test','Test','https://example.com','ai_lab'))
+    def add(title):
+        article=Article('Test',title,f'https://example.com/{title.split()[0].lower()}','id',datetime.now(timezone.utc),None,None,'')
+        save_article(db,'test',article,content='Body',markdown='Body',error=None,reason='test',discovered_at='now')
+        return article.url
+    scrolled,noted,highlighted,glanced,finished,untouched=(add(name) for name in (
+        'Scrolled report','Noted report','Highlighted report','Glanced report','Finished report','Untouched report'))
+    save_position(db,scrolled,0.35)
+    save_notes(db,noted,'<p>Takeaway</p>',0,'html')
+    save_highlight(db,highlighted,'Body')
+    save_position(db,glanced,0.01)
+    save_position(db,finished,0.6)
+    db.execute('UPDATE articles SET is_read=1 WHERE url=?',(finished,))
+    db.commit()
+    assert in_progress_count(db)==3
+    page=render_library(db,progress=True)
+    for title in ('Scrolled report','Noted report','Highlighted report'):
+        assert title in page
+    for title in ('Glanced report','Finished report','Untouched report'):
+        assert title not in page
+    assert '35% read' in page and 'Started' in page
+    assert 'In progress <span class="lib-tab-count">3</span>' in page
+    assert 'In progress · 35%' in render_library(db,selected=scrolled)
+    # With notes wins when both are asked for, so the tabs never disagree.
+    assert 'Glanced report' not in render_library(db,notes_only=True,progress=True)
+    save_position(db,glanced,0.02)
+    db.commit()
+    assert 'Glanced report' in render_library(db,progress=True)
+    db.close()

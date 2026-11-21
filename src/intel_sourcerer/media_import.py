@@ -5,7 +5,7 @@ from html import escape
 from email import policy
 from email.parser import BytesParser
 from datetime import datetime, timezone
-from urllib.parse import urlsplit, unquote
+from urllib.parse import urlsplit
 import hashlib
 import feedparser
 from bs4 import BeautifulSoup
@@ -82,15 +82,27 @@ async def import_file(database, payload, filename):
         return save_item(database,identity,title,markdown,'newsletter','Email newsletters',str(message.get('From') or ''),html=clean_html)
     from pptx import Presentation
     import zipfile
+    MAX_PPTX_UNCOMPRESSED = 100_000_000
+    MAX_PPTX_IMAGES = 200
+    MAX_PPTX_IMAGE_PIXELS = 16_000_000
     if not zipfile.is_zipfile(BytesIO(payload)):
         raise ValueError('This file is not a valid PPTX slide deck.')
     with zipfile.ZipFile(BytesIO(payload)) as archive:
-        if sum(entry.file_size for entry in archive.infolist()) > 100_000_000:
+        if sum(entry.file_size for entry in archive.infolist()) > MAX_PPTX_UNCOMPRESSED:
             raise ValueError('This slide deck expands beyond the 100 MB limit.')
+        # Verify actual decompressed bytes in case ZIP headers lie about file_size.
+        expanded = 0
+        for entry in archive.infolist():
+            with archive.open(entry) as stream:
+                while chunk := stream.read(65536):
+                    expanded += len(chunk)
+                    if expanded > MAX_PPTX_UNCOMPRESSED:
+                        raise ValueError('This slide deck expands beyond the 100 MB limit.')
     presentation = Presentation(BytesIO(payload))
     if len(presentation.slides) > 300:
         raise ValueError('Slide decks must contain no more than 300 slides.')
     html = ['<article>']
+    image_count = 0
     for index,slide in enumerate(presentation.slides,1):
         html.append(f'<h2>Slide {index}</h2>')
         for shape in slide.shapes:
@@ -99,11 +111,17 @@ async def import_file(database, payload, filename):
             if shape.has_table:
                 html.append('<table>' + ''.join('<tr>'+''.join('<td>'+escape(cell.text)+'</td>' for cell in row.cells)+'</tr>' for row in shape.table.rows)+'</table>')
             if hasattr(shape,'image'):
+                if image_count >= MAX_PPTX_IMAGES:
+                    continue
                 image = shape.image
                 # Convert to PNG so figures use a predictable browser-safe format.
                 from PIL import Image
-                output = BytesIO()
-                Image.open(BytesIO(image.blob)).convert('RGB').save(output,format='PNG')
+                with Image.open(BytesIO(image.blob)) as parsed_image:
+                    if parsed_image.width * parsed_image.height > MAX_PPTX_IMAGE_PIXELS:
+                        raise ValueError('An image in this slide deck exceeds the maximum pixel limit.')
+                    output = BytesIO()
+                    parsed_image.convert('RGB').save(output,format='PNG')
+                image_count += 1
                 src = store_asset(database,output.getvalue(),'.png')
                 html.append(f'<img src="{src}" alt="Slide {index} figure"/>')
         if slide.has_notes_slide:

@@ -33,6 +33,8 @@ jobs:
           node-version: "24"
       - name: Python tests
         run: uv run --locked pytest -q
+      - name: Python lint
+        run: uvx ruff@0.11.4 check src tests
       - name: Browser script tests
         run: |
           node tests/js/temporary-session.cjs

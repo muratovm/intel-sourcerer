@@ -1,5 +1,4 @@
 import asyncio
-from datetime import datetime, timezone
 import httpx
 import pytest
 from intel_sourcerer import discovery

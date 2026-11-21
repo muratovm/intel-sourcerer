@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 from urllib.parse import urlsplit, unquote
 
@@ -23,6 +24,8 @@ _worker = threading.Lock()
 _jobs = {}
 BUSY = {'queued', 'downloading', 'running'}
 _jobs_lock = threading.Lock()
+JOB_RETENTION_SECONDS = 3600
+MAX_JOBS = 500
 
 
 def whisper_command():
@@ -35,11 +38,32 @@ def available():
     return whisper_command() is not None
 
 
+def ytdlp_binary():
+    """Explicitly configured local yt-dlp binary (INTEL_SOURCERER_YTDLP), avoiding unpinned uvx downloads."""
+    configured = os.environ.get('INTEL_SOURCERER_YTDLP')
+    return configured if configured and Path(configured).is_file() and os.access(configured, os.X_OK) else None
+
+
 def downloader_command():
-    """uvx runs yt-dlp without installing it; the server reads YouTube with the owner's Chrome cookies."""
+    """Local yt-dlp binary if configured, otherwise uvx to run yt-dlp with the owner's Chrome cookies."""
+    explicit = ytdlp_binary()
+    if explicit:
+        return explicit
     configured = os.environ.get('INTEL_SOURCERER_UVX')
     candidates = [configured] if configured else [shutil.which('uvx'), str(Path.home() / '.local/bin/uvx')]
     return next((c for c in candidates if c and Path(c).is_file() and os.access(c, os.X_OK)), None)
+
+
+def ytdlp_base_command():
+    """Return (argv_prefix, executable_path) for running yt-dlp."""
+    explicit = ytdlp_binary()
+    if explicit:
+        return [explicit], explicit
+    command = downloader_command()
+    if not command:
+        return None, None
+    package = os.environ.get('INTEL_SOURCERER_YTDLP_PACKAGE', 'yt-dlp[default]').strip() or 'yt-dlp[default]'
+    return [command, '--from', package, 'yt-dlp'], command
 
 
 def tool_env(command):
@@ -53,11 +77,11 @@ def download_youtube(identifier, directory):
     """Fetch one video's audio with the Chrome cookies on this Mac and return the file."""
     if not re.fullmatch(r'[A-Za-z0-9_-]{11}', identifier or ''):
         raise ValueError('Not a YouTube video ID.')
-    command = downloader_command()
-    if not command:
-        raise ValueError('Downloading needs uv (uvx) on this machine.')
+    prefix, command = ytdlp_base_command()
+    if not prefix:
+        raise ValueError('Downloading needs yt-dlp or uv (uvx) on this machine.')
     result = subprocess.run(
-        [command, '--from', 'yt-dlp[default]', 'yt-dlp', '--extract-audio', '--audio-format', 'm4a',
+        [*prefix, '--extract-audio', '--audio-format', 'm4a',
          '--cookies-from-browser', 'chrome', '--no-playlist', '--no-progress', '--quiet',
          '--paths', str(directory), '--output', '%(id)s.%(ext)s',
          '--', 'https://www.youtube.com/watch?v=' + identifier],
@@ -153,25 +177,44 @@ def local_media_path(database, url):
     return path if path.parent == media and path.is_file() else None
 
 
+def _prune_jobs(now=None):
+    """Keep the in-memory job table bounded by evicting old terminal entries."""
+    now = time.monotonic() if now is None else now
+    cutoff = now - JOB_RETENTION_SECONDS
+    stale = [key for key, item in _jobs.items() if item.get('state') not in BUSY and item.get('_at', 0) < cutoff]
+    for key in stale:
+        _jobs.pop(key, None)
+    if len(_jobs) > MAX_JOBS:
+        terminal = sorted(
+            ((item.get('_at', 0), key) for key, item in _jobs.items() if item.get('state') not in BUSY),
+        )
+        for _, key in terminal[: len(_jobs) - MAX_JOBS]:
+            _jobs.pop(key, None)
+
+
 def status(database, url):
     with _jobs_lock:
-        return dict(_jobs.get((str(database), url), {}))
+        _prune_jobs()
+        entry = _jobs.get((str(database), url))
+        return {k: v for k, v in entry.items() if not k.startswith('_')} if entry else {}
 
 
 def _set(database, url, **state):
     with _jobs_lock:
-        _jobs[(str(database), url)] = state
+        _prune_jobs()
+        _jobs[(str(database), url)] = {**state, '_at': time.monotonic()}
 
 
 def start(database, url, path=None, *, remove_after=False, transcriber=None, youtube=None, downloader=None):
     """Transcribe in the background; status() reports progress. With youtube, download that video's audio first."""
     key = (str(database), url)
     with _jobs_lock:
+        _prune_jobs()
         if _jobs.get(key, {}).get('state') in BUSY:
             if remove_after:
                 Path(path).unlink(missing_ok=True)
-            return dict(_jobs[key])
-        _jobs[key] = {'state': 'queued'}
+            return {k: v for k, v in _jobs[key].items() if not k.startswith('_')}
+        _jobs[key] = {'state': 'queued', '_at': time.monotonic()}
 
     def run():
         try:

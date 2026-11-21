@@ -129,7 +129,7 @@ def render_session_stats_data(rows, attempts):
     """Render timing statistics from a serialized backend result."""
     from collections import defaultdict
     from html import escape
-    from zoneinfo import ZoneInfo
+    from .http_common import display_timezone
     from .templates import render_template
 
     if not rows:
@@ -146,7 +146,7 @@ def render_session_stats_data(rows, attempts):
     for row in rows:
         day = (
             datetime.fromisoformat(row["finished_at"])
-            .astimezone(ZoneInfo("America/Toronto"))
+            .astimezone(display_timezone())
             .date()
         )
         week = day.fromordinal(day.toordinal() - day.weekday()).isoformat()

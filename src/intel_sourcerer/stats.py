@@ -1,10 +1,10 @@
 """Yearly first-read activity, displayed in Toronto local time."""
 
+from .http_common import display_timezone
 from .templates import render_template
 from .timed_reading import session_stats_data, render_session_stats_data
 from collections import Counter
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 
 def stats_data(db):
@@ -20,7 +20,7 @@ def render_stats(db, now=None):
 
 def render_stats_section(data, now=None):
     """Build the heatmap from data provided by the backend."""
-    zone = ZoneInfo("America/Toronto")
+    zone = display_timezone()
     today = (now or datetime.now(zone)).astimezone(zone).date()
     counts = Counter()
     undated = 0

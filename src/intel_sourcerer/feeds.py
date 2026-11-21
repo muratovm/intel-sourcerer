@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import feedparser
 import httpx
 
-from .net_safety import public_only
+from .net_safety import MAX_RESPONSE_BYTES, public_only, read_bounded_bytes_async
 
 
 @dataclass(frozen=True)
@@ -104,18 +104,29 @@ def refusal_from(response: httpx.Response) -> Refusal | None:
     return None
 
 
-async def polite_get(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    """GET once, and once more only if the site named a short wait."""
-    response = await client.get(url)
-    refused = refusal_from(response)
-    if refused and refused.retry_wait is not None:
-        await asyncio.sleep(refused.retry_wait)
-        response = await client.get(url)
-        refused = refusal_from(response)
-    if refused:
-        raise Refused(refused)
-    response.raise_for_status()
-    return response
+async def polite_get(client: httpx.AsyncClient, url: str, *, max_bytes: int = MAX_RESPONSE_BYTES) -> httpx.Response:
+    """GET once, and once more only if the site named a short wait, streaming with a byte limit."""
+    for attempt in range(2):
+        wait = None
+        async with client.stream("GET", url) as response:
+            refused = refusal_from(response)
+            if refused and refused.retry_wait is not None and attempt == 0:
+                wait = refused.retry_wait
+            elif refused:
+                raise Refused(refused)
+            else:
+                response.raise_for_status()
+                body = await read_bounded_bytes_async(
+                    response, max_bytes, f"Article exceeds {max_bytes} bytes."
+                )
+                return httpx.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    content=body,
+                    request=response.request,
+                )
+        await asyncio.sleep(wait)
+    raise AssertionError("Unreachable")
 
 
 def _web_url(value: str, base: str) -> str | None:

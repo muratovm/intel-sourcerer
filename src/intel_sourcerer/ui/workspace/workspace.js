@@ -1,5 +1,24 @@
-"use strict";
-const userStoragePrefix = "user:" + document.querySelector('meta[name="user-id"]').content + ":";
+import {
+  draftKey,
+  isTemporarySession,
+  positionKey,
+  readItem,
+  readJSON,
+  removeItem,
+  storagePrefix,
+  writeItem,
+  writeJSON,
+} from "/workspace/storage.js";
+import { renderMedia as renderArticleMedia, seekTo, transcriptSeconds } from "/workspace/media.js";
+import {
+  clearHighlightMarks,
+  locateHighlight,
+  markHighlight,
+  passageAnchor,
+} from "/workspace/highlights.js";
+import { renderIOCs as renderArticleIOCs, renderRelated as renderArticleRelated } from "/workspace/iocs.js";
+import { initPaneDivider, initTextScale } from "/workspace/panes.js";
+
 const $ = (id) => document.getElementById(id);
 let standaloneURL = null;
 let state,
@@ -11,6 +30,7 @@ let state,
   selectedPassage = "",
   selectedPassageHTML = "";
 const token = document.querySelector('meta[name="csrf-token"]').content;
+
 function notice(message) {
   $("notice").textContent = message;
   $("notice").hidden = !message;
@@ -34,6 +54,16 @@ async function api(path, data) {
     throw new Error(result.error || "Unable to save. Please try again.");
   return result;
 }
+async function runBackgroundJob(path, data) {
+  const started = await api(path, data);
+  if (!started?.id) return started;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const job = await api("/api/jobs?" + new URLSearchParams({ id: started.id }));
+    if (job.state === "done") return job.result;
+    if (job.state === "failed") throw new Error(job.error || "Background request failed.");
+  }
+}
 function dateLabel(date) {
   return new Intl.DateTimeFormat("en-CA", {
     month: "short",
@@ -46,9 +76,6 @@ function show(view) {
   $("setup").inert = false;
   for (const id of ["home", "setup", "reader", "complete"])
     $(id).hidden = id !== view;
-}
-function positionKey(url) {
-  return `${userStoragePrefix}intel-position:${url}`;
 }
 function articleFraction() {
   const pane = $("article-pane"),
@@ -77,40 +104,27 @@ function sendPosition(keepalive = false) {
 }
 function stashScroll() {
   if (!currentArticle || $("article-pane").offsetParent === null) return;
-  try {
-    localStorage.setItem(
-      positionKey(currentArticle.url),
-      JSON.stringify({ fraction: articleFraction(), updated_at: new Date().toISOString() }),
-    );
-  } catch {}
+  writeJSON(positionKey(currentArticle.url), {
+    fraction: articleFraction(),
+    updated_at: new Date().toISOString(),
+  });
   clearTimeout(positionTimer);
   positionTimer = setTimeout(sendPosition, 1500);
 }
 // The newest position wins, whether it came from this device or another one.
 function savedFraction(article) {
-  let local = null;
-  try {
-    local = JSON.parse(localStorage.getItem(positionKey(article.url)));
-  } catch {}
+  const local = readJSON(positionKey(article.url));
   const server = article.position;
   if (local && (!server || local.updated_at > server.updated_at)) return local.fraction;
   return server?.fraction || 0;
 }
-function draftKey(url) {
-  return `${userStoragePrefix}intel-draft:${url}`;
-}
 function stashDraft() {
   if (noteModel) {
-    try {
-      localStorage.setItem(
-        draftKey(noteModel.url),
-        JSON.stringify({
-          text: notesText(),
-          format: "html",
-          revision: noteModel.revision,
-        }),
-      );
-    } catch {}
+    writeJSON(draftKey(noteModel.url), {
+      text: notesText(),
+      format: "html",
+      revision: noteModel.revision,
+    });
   }
 }
 function setBusy(value) {
@@ -132,21 +146,17 @@ function setBusy(value) {
 let draftQueue = [],
   draggingURL = null;
 function saveQueueDraft() {
-  try {
-    localStorage.setItem(userStoragePrefix + "intel-queue-draft", JSON.stringify(draftQueue));
-  } catch {}
+  writeJSON(storagePrefix() + "intel-queue-draft", draftQueue);
 }
 function renderSetup() {
   show("setup");
-  try {
-    const draft = JSON.parse(localStorage.getItem(userStoragePrefix + "intel-queue-draft"));
-    if (Array.isArray(draft))
-      draftQueue = [
-        ...new Set(
-          draft.filter((url) => state.articles.some((a) => a.url === url)),
-        ),
-      ].slice(0, 100);
-  } catch {}
+  const draft = readJSON(storagePrefix() + "intel-queue-draft");
+  if (Array.isArray(draft))
+    draftQueue = [
+      ...new Set(
+        draft.filter((url) => state.articles.some((a) => a.url === url)),
+      ),
+    ].slice(0, 100);
   renderBuilder();
   loadBuilderTopics();
 }
@@ -209,6 +219,8 @@ function renderHome() {
   renderTriage();
   $("recent-notes").replaceChildren();
   $("home-library-count").textContent = `${state.articles.length} saved articles`;
+  $("home-in-progress").hidden = !state.in_progress;
+  $("home-in-progress").firstElementChild.textContent = `${state.in_progress} ${state.in_progress === 1 ? "article" : "articles"} in progress`;
   const noted = state.articles
     .filter((a) => a.has_notes)
     .sort((a, b) =>
@@ -275,7 +287,7 @@ async function decideTriage(urls, decision, undoable = true) {
 }
 function renderTriage() {
   // Temporary sessions only hold what was just supplied, so there's nothing to sort.
-  const temporary = document.body.classList.contains("temporary-session"),
+  const temporary = isTemporarySession(),
     queued = new Set(
       state.queue && !state.queue.finished ? state.queue.items.map((item) => item.url) : [],
     ),
@@ -350,7 +362,7 @@ function renderTriage() {
 }
 $("home-build").onclick = () => renderSetup();
 // Temporary sessions only hold what was supplied, so there are no sources to check.
-$("home-find").hidden = document.body.classList.contains("temporary-session");
+$("home-find").hidden = isTemporarySession();
 // A new tab, so leaving to look at sources doesn't lose the result of the check.
 function sourcesLink(text) {
   const link = document.createElement("a");
@@ -368,7 +380,7 @@ $("home-find").onclick = async () => {
   status.replaceChildren("Checking your ", sourcesLink("sources"), " for the last 30 days. This can take a minute.");
   notice("");
   try {
-    const report = await api("/api/discover", { days: 30 }),
+    const report = await runBackgroundJob("/api/jobs/discover", { days: 30 }),
       added = report.sources.reduce((total, source) => total + source.inserted, 0);
     state = await api("/api/state");
     if (!$("home").hidden) renderHome();
@@ -388,9 +400,6 @@ $("resume-reading").onclick = () => {
   standaloneURL = null;
   renderQueue().catch((error) => notice(error.message));
 };
-function buildMeta(article) {
-  return readerMetadata(article);
-}
 function formatChip(article) {
   if (!article?.format_label) return null;
   const chip = document.createElement("span");
@@ -658,7 +667,7 @@ $("discovery-form").onsubmit = async (event) => {
     "Checking enabled publishers for fresh articles…";
   notice("");
   try {
-    const report = await api("/api/discover", {
+    const report = await runBackgroundJob("/api/jobs/discover", {
       days: Number($("timeframe").value),
     });
     state = await api("/api/state");
@@ -765,8 +774,9 @@ $("queue-form").onsubmit = async (event) => {
 };
 // Estimate prose reading time at 200 words per minute; exclude media placeholders.
 function proseMinutes(article) {
-  const body = document.createElement("div");
-  body.innerHTML = article.body_html;
+  const template = document.createElement("template");
+  template.innerHTML = article.body_html || "";
+  const body = template.content || template;
   body
     .querySelectorAll("[data-reading-exclude], figure, video, iframe")
     .forEach((element) => element.remove());
@@ -801,6 +811,23 @@ function readingTimeLabel(article) {
 
 function readerMetadata(article) {
   return `${article.publisher} · ${dateLabel(article.published_at)} · ${readingTimeLabel(article)} · ${article.is_read ? "Read" : "Unread"}${article.has_notes ? " · Noted" : ""}`;
+}
+
+function renderMedia() {
+  renderArticleMedia({
+    article: currentArticle,
+    mediaEnabled,
+    bodyEl: $("article-body"),
+    insertCallout,
+  });
+}
+
+function renderIOCs() {
+  renderArticleIOCs(currentArticle, {
+    bodyEl: $("article-body"),
+    setPhoneView,
+    notice,
+  });
 }
 
 async function renderQueue() {
@@ -842,19 +869,17 @@ async function renderQueue() {
   };
   let text = article.notes,
     draftFormat = null;
-  try {
-    const draft = JSON.parse(localStorage.getItem(draftKey(article.url)));
-    if (draft && draft.text !== article.notes) {
-      text = draft.text;
-      draftFormat = draft.format || "plain";
-      noteModel.revision = draft.revision;
-      notice(
-        draft.revision === article.notes_revision
-          ? "Recovered your unsaved note draft."
-          : "A local draft conflicts with newer saved notes. Copy your draft before reloading.",
-      );
-    }
-  } catch {}
+  const draft = readJSON(draftKey(article.url));
+  if (draft && draft.text !== article.notes) {
+    text = draft.text;
+    draftFormat = draft.format || "plain";
+    noteModel.revision = draft.revision;
+    notice(
+      draft.revision === article.notes_revision
+        ? "Recovered your unsaved note draft."
+        : "A local draft conflicts with newer saved notes. Copy your draft before reloading.",
+    );
+  }
   loadNotes(text, draftFormat || article.notes_format);
   noteModel.savedText =
     article.notes_format === "html"
@@ -865,9 +890,15 @@ async function renderQueue() {
   $("article-title").textContent = article.title;
   $("article-meta").textContent = readerMetadata(article);
   $("article-format").replaceChildren(...[formatChip(article)].filter(Boolean));
-  const source = new URL(article.url);
-  $("original").hidden = !["https:", "http:"].includes(source.protocol);
-  $("original").href = article.url;
+  let source = null;
+  try {
+    source = new URL(article.url);
+  } catch {}
+  $("original").hidden =
+    !source ||
+    !["https:", "http:"].includes(source.protocol) ||
+    (isTemporarySession() && source.hostname === "temporary.invalid");
+  $("original").href = source ? article.url : "";
   $("article-body").dataset.bodyFormat = article.body_format || "markdown";
   $("article-body").innerHTML = article.body_html;
   applyTextScale();
@@ -936,9 +967,9 @@ function saveNow() {
         model.revision = result.revision;
         model.savedText = text;
         if (noteModel === model) {
-          const container = document.createElement("div");
+          const container = document.createElement("template");
           container.innerHTML = text;
-          currentArticle.has_notes = !!container.textContent
+          currentArticle.has_notes = !!(container.content.textContent || "")
             .replace(/\u200b/g, "")
             .trim();
           $("article-meta").textContent = readerMetadata(currentArticle);
@@ -946,11 +977,8 @@ function saveNow() {
         if (noteModel === model) {
           $("save-status").textContent =
             notesText() === text ? "Saved" : "Unsaved changes";
-          if (notesText() === text) {
-            try {
-              localStorage.removeItem(draftKey(model.url));
-            } catch {}
-          } else stashDraft();
+          if (notesText() === text) removeItem(draftKey(model.url));
+          else stashDraft();
         }
       } catch (error) {
         if (noteModel === model) {
@@ -1037,24 +1065,6 @@ function updateSelectionBar() {
   $("highlight-selection").hidden = !selectedAnchor;
   $("remove-highlight").hidden = !activeHighlight;
 }
-// Offsets into the article's text, with context to tell repeated phrases apart.
-function passageAnchor(range) {
-  const body = $("article-body");
-  if (!body.contains(range.startContainer) || !body.contains(range.endContainer)) return null;
-  const before = document.createRange();
-  before.selectNodeContents(body);
-  before.setEnd(range.startContainer, range.startOffset);
-  const raw = range.toString(),
-    quote = raw.trim(),
-    start = before.toString().length + (raw.length - raw.trimStart().length),
-    all = body.textContent;
-  if (!quote || quote.length > 20000) return null;
-  return {
-    quote,
-    prefix: all.slice(Math.max(0, start - 60), start),
-    suffix: all.slice(start + quote.length, start + quote.length + 60),
-  };
-}
 function armPassage(text = "", html = "", words = 0, anchor = null) {
   selectedPassage = text;
   selectedPassageHTML = html;
@@ -1130,7 +1140,7 @@ document.addEventListener("selectionchange", () => {
       ? "<strong>" + plainHTML(text) + "</strong>"
       : sanitizeNotes(holder.innerHTML),
     holder.textContent.trim().split(/\s+/).length,
-    passageAnchor(range),
+    passageAnchor(range, $("article-body")),
   );
 });
 // Pressing a button must not clear the selection and hide it mid-click.
@@ -1160,70 +1170,15 @@ $("highlight-selection").onclick = async () => {
     notice(error.message);
   }
 };
-function clearHighlightMarks() {
-  const body = $("article-body");
-  for (const mark of body.querySelectorAll("mark.article-highlight"))
-    mark.replaceWith(...mark.childNodes);
-  for (const math of body.querySelectorAll(".article-highlight-math"))
-    math.classList.remove("article-highlight-math");
-  body.normalize();
-}
-// A repeated phrase resolves to the occurrence whose surrounding text matches best.
-function locateHighlight(all, highlight) {
-  let best = -1,
-    bestScore = -1,
-    index = -1;
-  while ((index = all.indexOf(highlight.quote, index + 1)) !== -1) {
-    let score = 0;
-    const before = highlight.prefix || "",
-      after = highlight.suffix || "";
-    while (score < before.length && all[index - 1 - score] === before[before.length - 1 - score]) score++;
-    let tail = 0;
-    while (tail < after.length && all[index + highlight.quote.length + tail] === after[tail]) tail++;
-    if (score + tail > bestScore) {
-      best = index;
-      bestScore = score + tail;
-    }
-  }
-  return best;
-}
-function markHighlight(start, end, id) {
-  const walker = document.createTreeWalker($("article-body"), NodeFilter.SHOW_TEXT),
-    pieces = [];
-  let node,
-    offset = 0;
-  while ((node = walker.nextNode())) {
-    const from = Math.max(start, offset),
-      to = Math.min(end, offset + node.length);
-    if (from < to) pieces.push([node, from - offset, to - offset]);
-    offset += node.length;
-  }
-  for (const [text, from, to] of pieces) {
-    // Marks inside MathML would break the equation, so the whole formula is tinted instead.
-    const math = text.parentElement.closest(".article-math");
-    if (math) {
-      math.classList.add("article-highlight-math");
-      math.dataset.highlightId = id;
-      continue;
-    }
-    if (!text.data.slice(from, to).trim()) continue;
-    const middle = text.splitText(from);
-    middle.splitText(to - from);
-    const mark = document.createElement("mark");
-    mark.className = "article-highlight";
-    mark.dataset.highlightId = id;
-    middle.replaceWith(mark);
-    mark.append(middle);
-  }
-}
 function renderHighlights() {
-  clearHighlightMarks();
+  const bodyEl = $("article-body");
+  clearHighlightMarks(bodyEl);
   const highlights = currentArticle?.highlights || [],
-    all = $("article-body").textContent;
+    all = bodyEl.textContent;
   for (const highlight of highlights) {
     const start = locateHighlight(all, highlight);
     highlight.found = start >= 0;
-    if (start >= 0) markHighlight(start, start + highlight.quote.length, highlight.id);
+    if (start >= 0) markHighlight(bodyEl, start, start + highlight.quote.length, highlight.id);
   }
   $("highlights-panel").hidden = !highlights.length;
   $("highlights-count").textContent = highlights.length ? `· ${highlights.length}` : "";
@@ -1273,118 +1228,6 @@ $("remove-highlight").onclick = async () => {
     notice(error.message);
   }
 };
-function copyText(button, text) {
-  const label = button.textContent;
-  navigator.clipboard
-    .writeText(text)
-    .then(() => {
-      button.textContent = "Copied";
-      setTimeout(() => (button.textContent = label), 1400);
-    })
-    .catch(() => notice("Your browser blocked copying. Select the text instead."));
-}
-// Reports often defang names as evil[.]exe, so the page text may not match the clean value.
-function jumpToText(value) {
-  setPhoneView("read");
-  const wanted = [value, value.replace(/\./g, "[.]"), value.replace(/\./g, "(.)"), value.replace(/\./g, "/")].map((item) => item.toLowerCase()),
-    walker = document.createTreeWalker($("article-body"), NodeFilter.SHOW_TEXT);
-  let node;
-  while ((node = walker.nextNode())) {
-    // Same length as the original, so offsets still line up: sites print non-breaking hyphens.
-    const text = node.data.toLowerCase().replace(/[\u2010-\u2014]/g, "-");
-    const found = wanted.map((item) => text.indexOf(item)).find((index) => index >= 0);
-    if (found === undefined) continue;
-    const block = node.parentElement,
-      range = document.createRange();
-    range.setStart(node, found);
-    range.setEnd(node, found + wanted.find((item) => text.includes(item)).length);
-    block.scrollIntoView({ block: "center" });
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    return;
-  }
-  // Some IDs exist only in a link, like a technique's name pointing at its ATT&CK page.
-  const link = [...$("article-body").querySelectorAll("a[href]")].find((anchor) =>
-    wanted.some((item) => anchor.getAttribute("href").toLowerCase().includes(item)),
-  );
-  if (link) {
-    link.scrollIntoView({ block: "center" });
-    const selection = window.getSelection();
-    selection.selectAllChildren(link);
-    return;
-  }
-  notice("That value isn't shown as plain text in this article.");
-}
-function reportLink(report) {
-  const link = document.createElement("a"),
-    title = document.createElement("span"),
-    meta = document.createElement("span");
-  link.className = "related-report";
-  link.href = "/?" + new URLSearchParams({ open: report.url });
-  title.className = "related-title";
-  title.textContent = report.title;
-  meta.className = "muted";
-  meta.textContent = `${report.publisher} · ${dateLabel(report.published_at)}`;
-  link.append(title, meta);
-  return link;
-}
-function sharedSummary(shared) {
-  const parts = [
-    ...shared.hashes.map((value) => `${value.slice(0, 12)}…`),
-    ...shared.cves,
-    ...shared.files,
-    ...shared.techniques,
-  ];
-  return parts.slice(0, 4).join(", ") + (parts.length > 4 ? ` and ${parts.length - 4} more` : "");
-}
-function addAlsoInButton(row, reports) {
-  const button = document.createElement("button"),
-    list = document.createElement("ul"),
-    label = `In ${reports.length} other ${reports.length === 1 ? "report" : "reports"}`;
-  button.type = "button";
-  button.className = "ioc-also-in";
-  button.textContent = `+${reports.length}`;
-  button.title = label;
-  button.setAttribute("aria-label", label);
-  button.setAttribute("aria-expanded", "false");
-  list.className = "ioc-also-list";
-  list.hidden = true;
-  for (const report of reports) {
-    const item = document.createElement("li");
-    item.append(reportLink(report));
-    list.append(item);
-  }
-  button.onclick = () => {
-    list.hidden = !list.hidden;
-    button.setAttribute("aria-expanded", String(!list.hidden));
-  };
-  row.append(button, list);
-}
-function renderRelated(data) {
-  const byURL = new Map(data.reports.map((report) => [report.url, report])),
-    related = data.related.map((url) => byURL.get(url));
-  $("related-list").replaceChildren(
-    ...related.map((report) => {
-      const row = document.createElement("li"),
-        shared = document.createElement("span");
-      shared.className = "related-shared";
-      shared.textContent = sharedSummary(report.shared);
-      row.append(reportLink(report), shared);
-      return row;
-    }),
-  );
-  $("related-count").textContent = related.length ? `· ${related.length}` : "";
-  $("related-panel").hidden = !related.length && data.complete;
-  $("related-status").textContent = data.complete
-    ? "Reports in your library that share a hash, CVE, or file name with this one, or at least three ATT&CK techniques."
-    : "Still reading the rest of your library, so more may appear.";
-  for (const row of document.querySelectorAll("#iocs-groups li[data-kind]")) {
-    row.querySelectorAll(".ioc-also-in, .ioc-also-list").forEach((item) => item.remove());
-    const urls = data.values[row.dataset.kind]?.[row.dataset.key];
-    if (urls) addAlsoInButton(row, urls.map((url) => byURL.get(url)));
-  }
-}
 // Separate from the article request, because a first visit may have a whole library to read.
 async function loadRelated(article) {
   $("related-panel").hidden = true;
@@ -1393,7 +1236,7 @@ async function loadRelated(article) {
     while (currentArticle === article) {
       const data = await api("/api/related?" + new URLSearchParams({ url: article.url }));
       if (currentArticle !== article) return;
-      renderRelated(data);
+      renderArticleRelated(data, { dateLabel });
       if (data.complete) return;
     }
   } catch {
@@ -1424,68 +1267,6 @@ async function loadTopics(article) {
     // Offline and temporary sessions have no topics, so the panel stays hidden.
   }
 }
-function iocGroup(title, items, label, kind) {
-  const group = document.createElement("section"),
-    heading = document.createElement("div"),
-    name = document.createElement("h3"),
-    copyAll = document.createElement("button"),
-    list = document.createElement("ul");
-  group.className = "ioc-group";
-  heading.className = "ioc-group-heading";
-  name.textContent = `${title} · ${items.length}`;
-  copyAll.type = "button";
-  copyAll.textContent = "Copy all";
-  copyAll.setAttribute("aria-label", `Copy all ${title.toLowerCase()}`);
-  copyAll.onclick = () => copyText(copyAll, items.map((item) => item.value).join("\n"));
-  heading.append(name, copyAll);
-  for (const item of items) {
-    const row = document.createElement("li"),
-      value = document.createElement("button");
-    value.type = "button";
-    value.className = "ioc-value";
-    value.textContent = label ? `${label(item)} ${item.value}` : item.value;
-    if (item.name) {
-      const name = document.createElement("span");
-      name.className = "ioc-name";
-      name.textContent = item.retired ? `${item.name} (retired)` : item.name;
-      value.append(" ", name);
-    }
-    value.setAttribute("aria-label", `Find ${item.value}${item.name ? ", " + item.name + "," : ""} in the article`);
-    value.onclick = () => jumpToText(item.value);
-    row.append(value);
-    if (kind) {
-      row.dataset.kind = kind;
-      row.dataset.key = kind === "files" ? item.value.toLowerCase() : item.value;
-    }
-    list.append(row);
-  }
-  group.append(heading, list);
-  return group;
-}
-function renderIOCs() {
-  const iocs = currentArticle?.iocs || {},
-    cves = iocs.cves || [],
-    techniques = iocs.techniques || [],
-    hashes = iocs.hashes || [],
-    files = iocs.files || [],
-    samples = files.filter((item) => !item.common),
-    common = files.filter((item) => item.common),
-    groups = [];
-  if (cves.length) groups.push(iocGroup("CVEs", cves, null, "cves"));
-  if (techniques.length) groups.push(iocGroup("MITRE ATT&CK", techniques, null, "techniques"));
-  if (hashes.length) groups.push(iocGroup("File hashes", hashes, (item) => item.type, "hashes"));
-  if (samples.length) groups.push(iocGroup("File names", samples, null, "files"));
-  if (common.length) groups.push(iocGroup("Common tools and files", common));
-  $("iocs-groups").replaceChildren(...groups);
-  $("iocs-panel").hidden = !groups.length;
-  $("iocs-panel").open = false;
-  const parts = [];
-  if (cves.length) parts.push(`${cves.length} ${cves.length === 1 ? "CVE" : "CVEs"}`);
-  if (techniques.length) parts.push(`${techniques.length} ${techniques.length === 1 ? "TTP" : "TTPs"}`);
-  if (hashes.length) parts.push(`${hashes.length} ${hashes.length === 1 ? "hash" : "hashes"}`);
-  if (files.length) parts.push(`${files.length} ${files.length === 1 ? "file" : "files"}`);
-  $("iocs-count").textContent = parts.length ? `· ${parts.join(", ")}` : "";
-}
 function setPhoneView(view) {
   const workspace = $("workspace");
   if (workspace.dataset.phoneView === view) return;
@@ -1503,28 +1284,17 @@ for (const tab of document.querySelectorAll(".reader-tabs [role=tab]")) {
   tab.addEventListener("mousedown", (event) => event.preventDefault());
   tab.onclick = () => setPhoneView(tab.dataset.view);
 }
-let textScale = 1;
-try {
-  textScale = Number(localStorage.getItem("intel-text-scale")) || 1;
-} catch {}
-function applyTextScale() {
-  $("article-body").style.zoom = String(textScale);
-  $("text-smaller").disabled = textScale <= 0.85;
-  $("text-larger").disabled = textScale >= 1.5;
-}
-function changeTextScale(step) {
-  const fraction = articleFraction();
-  textScale = Math.round((Math.min(1.5, Math.max(0.85, textScale + step))) * 100) / 100;
-  try {
-    localStorage.setItem("intel-text-scale", String(textScale));
-  } catch {}
-  applyTextScale();
-  window.renderArticleMath?.();
-  renderHighlights();
-  restoreFraction(fraction);
-}
-$("text-smaller").onclick = () => changeTextScale(-0.1);
-$("text-larger").onclick = () => changeTextScale(0.1);
+
+const { applyTextScale } = initTextScale({
+  readItem,
+  writeItem,
+  articleFraction,
+  restoreFraction,
+  onScaleChange() {
+    window.renderArticleMath?.();
+    renderHighlights();
+  },
+});
 $("theme-select").value = window.intelTheme?.get() || "auto";
 $("theme-select").onchange = () => window.intelTheme?.set($("theme-select").value);
 
@@ -1563,41 +1333,12 @@ function saveForOffline() {
     }
   })();
 }
-(async () => {
-  try {
-    try {
-      const pending = localStorage.getItem("intel-pending-save");
-      if (pending) {
-        localStorage.removeItem("intel-pending-save");
-        location.replace("/save" + pending);
-        return;
-      }
-    } catch {}
-    state = await api("/api/state");
-    setTimeout(saveForOffline, 2000);
-    const view = new URLSearchParams(location.search).get("view");
-    const open = new URLSearchParams(location.search).get("open");
-    if (open) {
-      standaloneURL = open;
-      await renderQueue();
-    } else if (view === "builder") renderSetup();
-    else if (view === "reader") await renderQueue();
-    else renderHome();
-  } catch (error) {
-    notice(error.message);
-  }
-})();
 
-let mediaEnabled = false;
-try {
-  mediaEnabled = localStorage.getItem(userStoragePrefix + "intel-load-media") === "true";
-} catch {}
+let mediaEnabled = readItem(storagePrefix() + "intel-load-media") === "true";
 $("load-media").checked = mediaEnabled;
 $("load-media").addEventListener("change", () => {
   mediaEnabled = $("load-media").checked;
-  try {
-    localStorage.setItem(userStoragePrefix + "intel-load-media", String(mediaEnabled));
-  } catch {}
+  writeItem(storagePrefix() + "intel-load-media", String(mediaEnabled));
   const scroll = $("article-pane").scrollTop;
   if (currentArticle) {
     $("article-body").innerHTML = currentArticle.body_html;
@@ -1608,157 +1349,9 @@ $("load-media").addEventListener("change", () => {
     $("article-pane").scrollTop = scroll;
   }
 });
-function embedURL(url) {
-  const host = url.hostname.toLowerCase();
-  if (
-    [
-      "www.youtube.com",
-      "youtube.com",
-      "www.youtube-nocookie.com",
-      "youtube-nocookie.com",
-      "youtu.be",
-    ].includes(host)
-  ) {
-    const id =
-      host === "youtu.be"
-        ? url.pathname.slice(1)
-        : url.pathname.startsWith("/embed/")
-          ? url.pathname.split("/")[2]
-          : url.searchParams.get("v");
-    if (id && /^[a-zA-Z0-9_-]{11}$/.test(id))
-      return "https://www.youtube-nocookie.com/embed/" + id;
-  }
-  if (["vimeo.com", "www.vimeo.com", "player.vimeo.com"].includes(host)) {
-    const id = url.pathname.split("/").filter(Boolean).pop();
-    if (id && /^\d+$/.test(id)) return "https://player.vimeo.com/video/" + id;
-  }
-  return null;
-}
-function renderMedia() {
-  const isVideoArticle = ["audio", "video"].includes(currentArticle?.content_format) || currentArticle?.url.startsWith("https://www.youtube.com/watch?v=");
-  if (!mediaEnabled && !isVideoArticle) return;
-  for (const block of $("article-body").querySelectorAll(
-    "figure[data-media-url]",
-  )) {
-    let url;
-    try {
-      url = new URL(block.dataset.mediaUrl, location.origin);
-    } catch {
-      continue;
-    }
-    if (!["https:", "http:"].includes(url.protocol)) continue;
-    let media;
-    if (block.dataset.mediaKind === "image") {
-      media = document.createElement("img");
-      media.alt =
-        block.dataset.mediaDescription === "No description supplied"
-          ? ""
-          : block.dataset.mediaDescription;
-      media.loading = "lazy";
-      media.decoding = "async";
-    } else if (block.dataset.mediaKind === "audio") {
-      media = document.createElement("audio");
-      media.controls = true;
-      media.preload = "metadata";
-    } else {
-      const embed = embedURL(url);
-      if (embed) {
-        media = document.createElement("iframe");
-        media.title =
-          block.dataset.mediaDescription === "No description supplied"
-            ? "Article video"
-            : block.dataset.mediaDescription;
-        media.loading = "lazy";
-        media.setAttribute("allow", "fullscreen; picture-in-picture");
-        media.setAttribute(
-          "sandbox",
-          "allow-scripts allow-same-origin allow-presentation",
-        );
-        url = new URL(embed);
-      } else if (/\.(mp4|webm|ogv|ogg)$/i.test(url.pathname)) {
-        media = document.createElement("video");
-        media.controls = true;
-        media.preload = "metadata";
-      } else continue;
-    }
-    media.className = "article-media";
-    // YouTube's player refuses to run (Error 153) unless it can see an origin.
-    media.referrerPolicy = media.tagName === "IFRAME" ? "strict-origin" : "no-referrer";
-    // An image opens at full size, which keeps diagrams readable on a phone.
-    let frame = media;
-    if (media.tagName === "IMG") {
-      frame = document.createElement("a");
-      frame.className = "media-link";
-      frame.href = url.href;
-      frame.target = "_blank";
-      frame.rel = "noopener noreferrer";
-      frame.append(media);
-      media.addEventListener("load", () => frame.classList.add("media-ready"), { once: true });
-    }
-    media.addEventListener(
-      "error",
-      () => {
-        frame.remove();
-        block.classList.remove("is-loaded");
-        const message = document.createElement("p");
-        message.className = "media-error";
-        message.textContent = "Media could not load.";
-        block.prepend(message);
-      },
-      { once: true },
-    );
-    media.src = url.href;
-    block.prepend(frame);
-    block.classList.add("is-loaded");
-    if (["AUDIO", "VIDEO"].includes(media.tagName)) {
-      const controls = document.createElement("div");
-      controls.className = "playback-tools";
-      const label = document.createElement("label");
-      label.textContent = "Speed ";
-      const speed = document.createElement("select");
-      for (const rate of [0.75, 1, 1.25, 1.5, 2]) {
-        const option = new Option(`${rate}×`, rate, false, rate === 1);
-        speed.append(option);
-      }
-      speed.onchange = () => { media.playbackRate = Number(speed.value); };
-      label.append(speed);
-      const timestamp = document.createElement("button");
-      timestamp.type = "button";
-      timestamp.textContent = "Add timestamp to notes";
-      timestamp.onclick = () => {
-        const seconds = Math.floor(media.currentTime || 0);
-        const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-        insertCallout(`At ${time} — `);
-      };
-      controls.append(label, timestamp);
-      media.after(controls);
-    }
-  }
-}
 
 // Transcripts: timestamps that seek the player, or a panel to make one with local Whisper.
 let transcriptPoll = null;
-function transcriptSeconds(text) {
-  const parts = text.split(":").map(Number);
-  return parts.reduce((total, part) => total * 60 + part, 0);
-}
-function seekTo(seconds) {
-  const body = $("article-body");
-  const player = body.querySelector("video, audio");
-  if (player) {
-    player.currentTime = seconds;
-    player.play().catch(() => {});
-    player.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    return;
-  }
-  const frame = body.querySelector("iframe.article-media");
-  if (!frame) return;
-  const url = new URL(frame.src);
-  url.searchParams.set("start", String(seconds));
-  url.searchParams.set("autoplay", "1");
-  frame.src = url.href;
-  frame.scrollIntoView({ block: "nearest", behavior: "smooth" });
-}
 function renderTranscript() {
   clearTimeout(transcriptPoll);
   const info = currentArticle?.transcript;
@@ -1775,7 +1368,7 @@ function renderTranscript() {
       button.className = "transcript-time";
       button.textContent = time.textContent;
       button.setAttribute("aria-label", `Play from ${time.textContent}`);
-      button.onclick = () => seekTo(transcriptSeconds(button.textContent));
+      button.onclick = () => seekTo(transcriptSeconds(button.textContent), body);
       time.replaceWith(button);
     }
     return;
@@ -1788,8 +1381,8 @@ function renderTranscript() {
   const message = document.createElement("p");
   message.className = "transcript-status";
   panel.append(heading, message);
-  const busy = ["queued", "downloading", "running"].includes(info.state);
-  if (busy) {
+  const running = ["queued", "downloading", "running"].includes(info.state);
+  if (running) {
     message.textContent = {
       queued: "Waiting for another transcription to finish.",
       downloading: "Downloading the audio from YouTube. The first time, macOS may ask on the Mac to allow access to Chrome Safe Storage.",
@@ -1907,73 +1500,16 @@ async function checkTranscript() {
   }
 }
 
-const divider = $("pane-divider"),
-  workspace = document.querySelector(".workspace");
-let panePercent = 50,
-  resizingPointer = null;
-function setPaneWidth(value, persist = true) {
-  panePercent = Math.max(30, Math.min(70, value));
-  workspace.style.setProperty("--article-width", `${panePercent}fr`);
-  workspace.style.setProperty("--notes-width", `${100 - panePercent}fr`);
-  divider.setAttribute("aria-valuenow", String(Math.round(panePercent)));
-  divider.setAttribute(
-    "aria-valuetext",
-    `Article ${Math.round(panePercent)} percent, notes ${100 - Math.round(panePercent)} percent`,
-  );
-  if (persist)
-    try {
-      localStorage.setItem(userStoragePrefix + "intel-pane-width", String(panePercent));
-    } catch {}
-}
-try {
-  const stored = Number(localStorage.getItem(userStoragePrefix + "intel-pane-width"));
-  if (Number.isFinite(stored) && stored >= 30 && stored <= 70)
-    setPaneWidth(stored, false);
-} catch {}
-divider.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0) return;
-  event.preventDefault();
-  resizingPointer = event.pointerId;
-  divider.setPointerCapture(event.pointerId);
-  divider.focus();
-  workspace.classList.add("resizing-panes");
-});
-divider.addEventListener("pointermove", (event) => {
-  if (event.pointerId !== resizingPointer) return;
-  const bounds = workspace.getBoundingClientRect();
-  setPaneWidth(((event.clientX - bounds.left - 5) / (bounds.width - 10)) * 100);
-});
-function stopResize() {
-  resizingPointer = null;
-  workspace.classList.remove("resizing-panes");
-}
-divider.addEventListener("pointerup", stopResize);
-divider.addEventListener("pointercancel", stopResize);
-divider.addEventListener("lostpointercapture", stopResize);
-divider.addEventListener("dblclick", () => setPaneWidth(50));
-divider.addEventListener("keydown", (event) => {
-  const changes = { ArrowLeft: -2, ArrowRight: 2 };
-  if (event.key in changes) {
-    event.preventDefault();
-    setPaneWidth(panePercent + changes[event.key]);
-  } else if (event.key === "Home" || event.key === "End") {
-    event.preventDefault();
-    setPaneWidth(event.key === "Home" ? 30 : 70);
-  } else if (event.key === "Enter") {
-    event.preventDefault();
-    setPaneWidth(50);
-  }
-});
+initPaneDivider({ storagePrefix, readItem, writeItem });
 
 // Finder drops provide file bytes, rather than a usable local filesystem path.
 async function importFiles(files) {
   $("add-link").disabled = true;
   const feedback = document.getElementById("link-status");
   feedback.hidden = false;
-  let lastURL = null;
   try {
     for (const file of files.slice(0, 20)) {
-      if (!(document.body.classList.contains("temporary-session") ? /\.(pdf|md|markdown|html|htm|txt|json)$/i : /\.(pdf|mp3|m4a|ogg|wav|mp4|webm|eml|pptx)$/i).test(file.name)) throw new Error("Unsupported file type.");
+      if (!(isTemporarySession() ? /\.(pdf|md|markdown|html|htm|txt|json)$/i : /\.(pdf|mp3|m4a|ogg|wav|mp4|webm|eml|pptx)$/i).test(file.name)) throw new Error("Unsupported file type.");
       if (file.size > (/\.(pdf|eml|pptx)$/i.test(file.name) ? 20000000 : 100000000)) throw new Error("Documents are limited to 20 MB; audio/video to 100 MB.");
       feedback.textContent = `Importing ${file.name}…`;
       const response = await fetch("/api/file-upload", {
@@ -1984,7 +1520,7 @@ async function importFiles(files) {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "File import failed.");
       state = await api("/api/state");
-        addToDraft(result.url);
+      addToDraft(result.url);
     }
     feedback.textContent = "Files added.";
   } catch (error) {
@@ -1993,7 +1529,6 @@ async function importFiles(files) {
     $("add-link").disabled = false;
   }
 }
-
 
 let articleToDelete = null;
 function openArticleDelete(article) {
@@ -2013,13 +1548,10 @@ $("confirm-delete").onclick = async () => {
   $("cancel-delete").disabled = true;
   $("delete-error").hidden = true;
   try {
-    await api("/api/delete-article", {url: article.url});
-    draftQueue = draftQueue.filter(url => url !== article.url);
+    await api("/api/delete-article", { url: article.url });
+    draftQueue = draftQueue.filter((url) => url !== article.url);
     saveQueueDraft();
-    try {
-      const storage = document.body.classList.contains("temporary-session") ? sessionStorage : localStorage;
-      storage.removeItem(userStoragePrefix + "intel-draft:" + article.url);
-    } catch {}
+    removeItem(draftKey(article.url));
     state = await api("/api/state");
     renderBuilder();
     $("delete-dialog").close();
@@ -2032,3 +1564,42 @@ $("confirm-delete").onclick = async () => {
     $("cancel-delete").disabled = false;
   }
 };
+
+// Expose workspace hooks needed by companion classic scripts (notes-editor.js, focus.js, temporary.js).
+Object.defineProperty(window, "busy", { get: () => busy, configurable: true });
+Object.defineProperty(window, "currentArticle", { get: () => currentArticle, configurable: true });
+window.notice = notice;
+window.saveNow = saveNow;
+window.focusMinutes = focusMinutes;
+window.readerMetadata = readerMetadata;
+
+(async () => {
+  try {
+    const pending = readItem("intel-pending-save");
+    if (pending && pending.startsWith("?")) {
+      removeItem("intel-pending-save");
+      location.replace("/save" + pending);
+      return;
+    }
+    state = await api("/api/state");
+    setTimeout(saveForOffline, 2000);
+    const view = new URLSearchParams(location.search).get("view");
+    const open = new URLSearchParams(location.search).get("open");
+    if (open) {
+      standaloneURL = open;
+      await renderQueue();
+    } else if (view === "builder") renderSetup();
+    else if (view === "reader") await renderQueue();
+    else if (isTemporarySession()) {
+      try {
+        if (!sessionStorage.getItem(storagePrefix() + "intel-queue-draft") && state.queue) {
+          draftQueue = state.queue.items.map((item) => item.url);
+          saveQueueDraft();
+        }
+      } catch {}
+      renderSetup();
+    } else renderHome();
+  } catch (error) {
+    notice(error.message);
+  }
+})();

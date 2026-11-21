@@ -6,7 +6,7 @@ from urllib.parse import unquote, urljoin, urlsplit
 
 import httpx
 
-from .net_safety import public_only
+from .net_safety import public_only, read_bounded_bytes
 from bs4 import BeautifulSoup
 
 from .content import extract_article, render_article_html, render_markdown
@@ -25,14 +25,16 @@ def fetch_public(url):
     with public_only(httpx.Client(timeout=25, trust_env=False, headers={'User-Agent': 'IntelSourcerer/0.1'})) as client:
         for _ in range(6):
             url = public_url(url)
-            response = client.get(url)
-            if response.is_redirect:
-                url = urljoin(url, response.headers.get('location', ''))
-                continue
-            response.raise_for_status()
-            if len(response.content) > MAX_BYTES:
-                raise ValueError('larger than 20 MB')
-            return response.content, response.headers.get('content-type', '').lower(), url
+            with client.stream('GET', url) as response:
+                if response.is_redirect:
+                    location = response.headers.get('location', '')
+                    if not location:
+                        raise ValueError('redirect missing location')
+                    url = urljoin(url, location)
+                    continue
+                response.raise_for_status()
+                payload = read_bounded_bytes(response, MAX_BYTES, 'larger than 20 MB')
+                return payload, response.headers.get('content-type', '').lower(), url
     raise ValueError('too many redirects')
 
 
