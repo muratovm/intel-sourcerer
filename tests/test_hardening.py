@@ -57,11 +57,26 @@ def test_public_only_blocks_non_http_ports(monkeypatch):
 
 
 def test_polite_get_enforces_streaming_size_limit():
+    import gzip
+
     async def run():
         transport = httpx.MockTransport(lambda _: httpx.Response(200, content=b"x" * 2048))
         async with httpx.AsyncClient(transport=transport) as client:
             with pytest.raises(ValueError, match="exceeds"):
                 await feeds.polite_get(client, "https://example.com/huge", max_bytes=1024)
+
+        compressed = gzip.compress(b"<html><body><h1>Anthropic</h1></body></html>")
+        gz_transport = httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                content=compressed,
+                headers={"Content-Type": "text/html; charset=utf-8", "Content-Encoding": "gzip"},
+            )
+        )
+        async with httpx.AsyncClient(transport=gz_transport) as client:
+            response = await feeds.polite_get(client, "https://example.com/gzip")
+            assert "Anthropic" in response.text
+            assert "content-encoding" not in response.headers
 
     asyncio.run(run())
 

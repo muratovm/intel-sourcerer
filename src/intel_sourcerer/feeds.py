@@ -119,11 +119,15 @@ async def polite_get(client: httpx.AsyncClient, url: str, *, max_bytes: int = MA
                 body = await read_bounded_bytes_async(
                     response, max_bytes, f"Article exceeds {max_bytes} bytes."
                 )
+                headers = response.headers.copy()
+                for header in ("content-encoding", "content-length", "transfer-encoding"):
+                    headers.pop(header, None)
                 return httpx.Response(
                     response.status_code,
-                    headers=response.headers,
+                    headers=headers,
                     content=body,
                     request=response.request,
+                    history=response.history,
                 )
         await asyncio.sleep(wait)
     raise AssertionError("Unreachable")
