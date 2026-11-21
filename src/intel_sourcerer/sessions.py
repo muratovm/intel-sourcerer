@@ -26,17 +26,10 @@ def has_notes(text, format='plain'):
     return bool((text or '').replace('\u200b','').strip())
 
 
-def _item_minutes(content_format, url, text_len, media_json):
-    from .youtube import video_duration
+def _item_minutes(content_format, url, word_count, media_json, fallback_text=""):
+    from .content import estimate_minutes
 
-    media = content_format in {"audio", "video"} or (url or "").startswith("https://www.youtube.com/watch?v=")
-    if media:
-        dur = video_duration(media_json)
-        if dur:
-            return max(1, round(dur / 60))
-    if text_len and text_len > 0:
-        return max(1, round(text_len / 1100))
-    return 5
+    return estimate_minutes(content_format, url, word_count, media_json, fallback_text)
 
 
 def queue_state(db):
@@ -44,13 +37,19 @@ def queue_state(db):
     if not queue:
         return None
     items = [dict(r) for r in db.execute('''SELECT a.url,a.title,a.published_at,a.is_read,a.notes,a.notes_format,
-      a.content_format,a.media_json,length(coalesce(a.content_text,'')) AS text_len,s.name AS publisher
+      a.content_format,a.media_json,a.word_count,
+      CASE WHEN a.word_count IS NULL THEN coalesce(a.content_text,'') ELSE '' END AS fallback_text,
+      s.name AS publisher
       FROM queue_items q JOIN articles a ON a.url=q.article_url JOIN sources s ON s.id=a.source_id
       WHERE q.queue_id=? ORDER BY q.position''', (queue['id'],))]
     for item in items:
         item['has_notes'] = has_notes(item.pop('notes'), item.pop('notes_format'))
         item['minutes'] = _item_minutes(
-            item.pop('content_format'), item['url'], item.pop('text_len'), item.pop('media_json')
+            item.pop('content_format'),
+            item['url'],
+            item.pop('word_count'),
+            item.pop('media_json'),
+            item.pop('fallback_text'),
         )
     return dict(id=queue['id'],cursor=queue['cursor'],finished=bool(queue['finished']),items=items,
       read_count=sum(bool(i['is_read']) for i in items),created_at=queue['created_at'])

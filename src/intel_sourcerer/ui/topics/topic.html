@@ -69,7 +69,11 @@
           <aside class="topic-notes" aria-label="Topic notes">
             <div class="notes-heading">
               <h2>Topic notes</h2>
-              <span id="save-status" class="muted" role="status" aria-live="polite">Saved</span>
+              <div class="notes-heading-actions">
+                <span id="save-status" class="muted" role="status" aria-live="polite">Saved</span>
+                <button type="button" class="notes-action-btn" data-notes-copy title="Copy notes as Markdown">Copy</button>
+                <button type="button" class="notes-action-btn" data-notes-export title="Download notes as Markdown (.md)">Export .md</button>
+              </div>
             </div>
             <div class="notes-editor">
               <div class="notes-toolbar" role="toolbar" aria-label="Note formatting">

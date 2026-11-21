@@ -80,6 +80,16 @@ def test_queue_enforces_reasonable_session_limit(tmp_path):
     db.close()
 
 
+def test_queue_minutes_match_word_count_not_raw_chars(tmp_path):
+    db = _reading_db(tmp_path)
+    # Long technical words / LaTeX: 1,200 words (6 min at 200 wpm) but ~24,000 chars (~22 min under old chars/1100).
+    long_text = " ".join(["supercalifragilistic"] * 1200)
+    db.execute("UPDATE articles SET content_text=?, word_count=1200 WHERE url='https://example.com/a'", (long_text,))
+    q = create_queue(db, ['https://example.com/a'])
+    assert q['items'][0]['minutes'] == 6
+    db.close()
+
+
 def test_rich_notes_sanitize_and_preserve_formatting():
     from intel_sourcerer.sessions import clean_notes
     result=clean_notes('<blockquote onclick="bad()"><b style="background-color: yellow">Finding</b><img src=x onerror="bad()"></blockquote>')

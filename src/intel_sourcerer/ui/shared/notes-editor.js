@@ -671,3 +671,156 @@ document.addEventListener("click", (event) => {
     if (!menu.contains(event.target)) menu.open = false;
   }
 });
+
+// Convert the live notes editor DOM to clean Markdown for clipboard copy or .md file export.
+function notesToMarkdown(root = noteBox) {
+  function inline(node) {
+    if (node.nodeType === 3) return node.textContent.replace(/\u200b/g, "");
+    if (node.nodeType !== 1) return "";
+    const tag = node.tagName.toLowerCase();
+    if (tag === "br") return "\n";
+    const inner = [...node.childNodes].map(inline).join("");
+    if (tag === "strong" || tag === "b") return inner.trim() ? `**${inner}**` : inner;
+    if (tag === "em" || tag === "i") return inner.trim() ? `*${inner}*` : inner;
+    if (tag === "mark") return inner.trim() ? `==${inner}==` : inner;
+    if (tag === "code") return `\`${inner.replace(/`/g, "\\`")}\``;
+    if (tag === "a") {
+      const href = noteLink(node);
+      return href ? `[${inner || href}](${href})` : inner;
+    }
+    return inner;
+  }
+  function renderList(list, depth) {
+    const ordered = list.tagName.toLowerCase() === "ol";
+    const checklist = !ordered && list.classList.contains("checklist");
+    const indent = "  ".repeat(depth);
+    let idx = 1;
+    const lines = [];
+    for (const child of list.children) {
+      if (child.tagName.toLowerCase() !== "li") continue;
+      const prefix = checklist
+        ? child.dataset.checked === "true"
+          ? "- [x] "
+          : "- [ ] "
+        : ordered
+          ? `${idx++}. `
+          : "- ";
+      const textParts = [];
+      const subLists = [];
+      for (const n of child.childNodes) {
+        if (n.nodeType === 1 && ["UL", "OL"].includes(n.tagName)) subLists.push(n);
+        else textParts.push(inline(n));
+      }
+      const line = textParts.join("").replace(/\s*\n\s*/g, " ").trim();
+      lines.push(`${indent}${prefix}${line}`);
+      for (const sub of subLists) lines.push(renderList(sub, depth + 1));
+    }
+    return lines.join("\n");
+  }
+  function renderTable(table) {
+    const rows = [...table.querySelectorAll("tr")].map((tr) =>
+      [...tr.children]
+        .filter((c) => ["TH", "TD"].includes(c.tagName))
+        .map((c) => [...c.childNodes].map(inline).join("").replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|").trim()),
+    );
+    if (!rows.length) return "";
+    const cols = Math.max(...rows.map((r) => r.length));
+    const pad = (r) => Array.from({ length: cols }, (_, i) => r[i] || "");
+    const header = pad(rows[0]);
+    const out = [`| ${header.join(" | ")} |`, `| ${header.map(() => "---").join(" | ")} |`];
+    for (const row of rows.slice(1)) out.push(`| ${pad(row).join(" | ")} |`);
+    return out.join("\n");
+  }
+  function block(node) {
+    if (node.nodeType === 3) {
+      const txt = node.textContent.replace(/\u200b/g, "").trim();
+      return txt ? `${txt}\n\n` : "";
+    }
+    if (node.nodeType !== 1) return "";
+    const tag = node.tagName.toLowerCase();
+    if (tag === "ul" || tag === "ol") return `${renderList(node, 0)}\n\n`;
+    if (tag === "table") return `${renderTable(node)}\n\n`;
+    if (tag === "pre") return `\`\`\`\n${node.textContent.replace(/\u200b/g, "").trimEnd()}\n\`\`\`\n\n`;
+    if (tag === "blockquote") {
+      const inner = [...node.childNodes].map(block).join("").trim() || inline(node).trim();
+      return inner ? inner.split("\n").map((l) => `> ${l}`).join("\n") + "\n\n" : "";
+    }
+    if (tag === "p" || tag === "div") {
+      const hasBlocks = [...node.children].some((c) => ["UL", "OL", "TABLE", "PRE", "BLOCKQUOTE", "P", "DIV"].includes(c.tagName));
+      if (hasBlocks) return [...node.childNodes].map(block).join("");
+      const txt = [...node.childNodes].map(inline).join("").trim();
+      return txt ? `${txt}\n\n` : "";
+    }
+    const txt = inline(node).trim();
+    return txt ? `${txt}\n\n` : "";
+  }
+  return [...root.childNodes]
+    .map(block)
+    .join("")
+    .replace(/\u00a0/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function notesDocumentTitle() {
+  const topicHeading = document.querySelector("#topic-page h1")?.textContent?.trim();
+  if (topicHeading) return topicHeading;
+  const articleHeading = document.getElementById("article-title")?.textContent?.trim();
+  return articleHeading || "Notes";
+}
+
+function notesSlug(name) {
+  return (name || "notes")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60) || "notes";
+}
+
+document.querySelectorAll("[data-notes-copy]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const md = notesToMarkdown();
+    if (!md) {
+      if (typeof notice === "function") notice("No notes to copy yet.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(md);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = md;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.append(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    const prev = button.textContent;
+    button.textContent = "Copied ✓";
+    setTimeout(() => {
+      button.textContent = prev;
+    }, 1800);
+  });
+});
+
+document.querySelectorAll("[data-notes-export]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const md = notesToMarkdown();
+    if (!md) {
+      if (typeof notice === "function") notice("No notes to export yet.");
+      return;
+    }
+    const title = notesDocumentTitle();
+    const content = `# ${title} — Notes\n\n${md}\n`;
+    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${notesSlug(title)}-notes.md`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+});

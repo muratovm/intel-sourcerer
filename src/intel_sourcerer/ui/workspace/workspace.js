@@ -1157,12 +1157,12 @@ function readingTimeLabel(article) {
   const media = ["audio", "video"].includes(article.content_format)
     ? article.content_format
     : article.url.startsWith("https://www.youtube.com/watch?v=") ? "video" : "";
-  if (!media) return `~${proseMinutes(article)} min read`;
+  if (!media) return `~${formatDuration(proseMinutes(article))} read`;
   const length = article.duration
-    ? `${Math.max(1, Math.round(article.duration / 60))} min ${media}`
+    ? `${formatDuration(Math.max(1, Math.round(article.duration / 60)))} ${media}`
     : media === "audio" ? "Audio" : "Video";
   return article.transcript?.has_transcript
-    ? `${length} · ~${proseMinutes(article)} min read`
+    ? `${length} · ~${formatDuration(proseMinutes(article))} read`
     : length;
 }
 
@@ -2023,7 +2023,10 @@ function populateArticleCitations(article) {
       btn.onclick = () => {
         if (busy) return;
         const link = document.createElement("a");
-        link.setAttribute("href", "/?" + new URLSearchParams({ open: item.url }));
+        const href = /^https?:\/\//i.test(item.url) ? item.url : "/?" + new URLSearchParams({ open: item.url });
+        link.setAttribute("href", href);
+        link.setAttribute("target", "_blank");
+        link.setAttribute("rel", "noopener noreferrer");
         link.textContent = `${item.publisher}, ${dateLabel(item.published_at)}`;
         focusNotes();
         document.execCommand("insertHTML", false, link.outerHTML + "&nbsp;");

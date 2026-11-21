@@ -218,6 +218,7 @@ def test_topic_page_renders_and_escapes(db):
     page = render_topic(topic_data(db, topic), 'csrf')
     assert '<i>Title' not in page and '&lt;i&gt;Title' in page
     assert 'value="T &quot;quoted&quot;"' in page and 'content="csrf"' in page
+    assert f'data-cite="{url}"' in page
     assert 'Topic not found' in render_topic({'topic': None})
 
 

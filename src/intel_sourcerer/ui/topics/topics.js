@@ -388,6 +388,8 @@ if (page) {
     button.addEventListener("click", () => {
       const link = document.createElement("a");
       link.setAttribute("href", button.dataset.cite);
+      link.setAttribute("target", "_blank");
+      link.setAttribute("rel", "noopener noreferrer");
       link.textContent = button.dataset.label;
       focusNotes();
       document.execCommand("insertHTML", false, link.outerHTML + "&nbsp;");

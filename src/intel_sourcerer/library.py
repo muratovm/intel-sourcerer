@@ -220,7 +220,7 @@ def library_rows(db, selected="", include_body_text=False):
         for row in db.execute(
             f"""SELECT a.url,a.source_id,a.title,a.published_at,a.author,{body_col},
             a.content_status,
-            a.discovered_at,a.content_format,a.media_json,a.is_read,a.notes,a.notes_format,a.notes_updated_at,
+            a.discovered_at,a.content_format,a.media_json,a.word_count,a.is_read,a.notes,a.notes_format,a.notes_updated_at,
             a.notes_revision,a.triage,
             CASE WHEN a.url=? THEN a.content_html END AS content_html,
             CASE WHEN a.url=? THEN a.content_markdown END AS content_markdown,
@@ -242,19 +242,15 @@ def _kind(row):
 
 
 def _estimate_minutes(row):
-    from .youtube import video_duration
+    from .content import estimate_minutes
 
-    media = row.get("content_format") in {"audio", "video"} or (row.get("url") or "").startswith("https://www.youtube.com/watch?v=")
-    if media:
-        dur = video_duration(row.get("media_json"))
-        if dur:
-            return max(1, round(dur / 60))
-    text_len = row.get("text_len")
-    if text_len is None:
-        text_len = len(row.get("content_text") or "")
-    if text_len:
-        return max(1, round(text_len / 1100))
-    return 5
+    return estimate_minutes(
+        row.get("content_format"),
+        row.get("url"),
+        row.get("word_count"),
+        row.get("media_json"),
+        row.get("content_text") or "",
+    )
 
 
 TIMEFRAME_OPTIONS = (

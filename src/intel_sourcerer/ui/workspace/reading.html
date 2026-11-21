@@ -98,9 +98,13 @@
     <aside class="notes-pane" aria-label="Article notes">
       <div class="notes-heading">
         <h2>Notes</h2>
-        <span id="save-status" class="muted" role="status" aria-live="polite"
-          >Saved</span
-        >
+        <div class="notes-heading-actions">
+          <span id="save-status" class="muted" role="status" aria-live="polite"
+            >Saved</span
+          >
+          <button type="button" class="notes-action-btn" data-notes-copy title="Copy notes as Markdown">Copy</button>
+          <button type="button" class="notes-action-btn" data-notes-export title="Download notes as Markdown (.md)">Export .md</button>
+        </div>
       </div>
       <label class="sr-only" for="notes">Your notes for this article</label>
       <div class="notes-editor">

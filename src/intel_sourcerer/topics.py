@@ -184,6 +184,11 @@ def citation_href(url):
     return "/?" + urlencode({"open": url})
 
 
+def source_cite_href(url):
+    """Link citations to the original HTTP(S) source; keep internal reader link for local files."""
+    return url if urlsplit(url or "").scheme in {"http", "https"} else citation_href(url)
+
+
 def _cites(href, url):
     parts = urlsplit(href or "")
     return parts.path == "/" and parse_qs(parts.query).get("open") == [url]
@@ -610,7 +615,7 @@ def render_topic(data, csrf_token=""):
             )
         )
         cite.append(
-            f'<button type="button" data-cite="{escape(citation_href(item["url"]), quote=True)}" '
+            f'<button type="button" data-cite="{escape(source_cite_href(item["url"]), quote=True)}" '
             f'data-label="{escape(item["publisher"] + ", " + date_str, quote=True)}">'
             f'<span>{escape(item["title"])}</span><span class="muted">{escape(item["publisher"])} · {escape(date_str)}</span></button>'
         )

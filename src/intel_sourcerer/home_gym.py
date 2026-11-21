@@ -55,16 +55,10 @@ def _extract_takeaway(notes, notes_format, highlight_quote=""):
     return ""
 
 
-def _estimate_minutes(content_format, url, text_len, media_json):
-    media = content_format in {"audio", "video"} or (url or "").startswith("https://www.youtube.com/watch?v=")
-    if media:
-        dur = video_duration(media_json)
-        if dur:
-            return max(1, round(dur / 60))
-    # ~5.5 chars/word * 200 wpm ≈ 1100 chars/minute.
-    if text_len and text_len > 0:
-        return max(1, round(text_len / 1100))
-    return 5
+def _estimate_minutes(content_format, url, word_count, media_json, fallback_text=""):
+    from .content import estimate_minutes
+
+    return estimate_minutes(content_format, url, word_count, media_json, fallback_text)
 
 
 def home_gym_data(db, now=None):
@@ -111,8 +105,9 @@ def home_gym_data(db, now=None):
 
     # 2. Recent research landscape (30 days, falling back to 90 days if quiet).
     rows = db.execute(
-        """SELECT a.url, a.title, a.published_at, a.is_read, a.triage, a.content_format, a.media_json,
-                  substr(a.content_text, 1, 1500) AS snippet_text, length(coalesce(a.content_text, '')) AS text_len,
+        """SELECT a.url, a.title, a.published_at, a.is_read, a.triage, a.content_format, a.media_json, a.word_count,
+                  substr(a.content_text, 1, 1500) AS snippet_text,
+                  CASE WHEN a.word_count IS NULL THEN coalesce(a.content_text, '') ELSE '' END AS fallback_text,
                   s.name AS publisher
            FROM articles a JOIN sources s ON s.id=a.source_id
            WHERE s.enabled=1
@@ -120,7 +115,7 @@ def home_gym_data(db, now=None):
     ).fetchall()
 
     article_minutes = {
-        r["url"]: _estimate_minutes(r["content_format"], r["url"], r["text_len"], r["media_json"])
+        r["url"]: _estimate_minutes(r["content_format"], r["url"], r["word_count"], r["media_json"], r["fallback_text"])
         for r in rows
     }
 

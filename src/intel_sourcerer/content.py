@@ -461,6 +461,21 @@ def reading_word_count(markdown, fallback='', html=None):
     return len(soup.get_text(' ', strip=True).split())
 
 
+def estimate_minutes(content_format, url, word_count=None, media_json=None, fallback_text=""):
+    """Consistent reading/watching duration in minutes (media duration, or ceil(word_count / 200))."""
+    from .youtube import video_duration
+
+    media = content_format in {"audio", "video"} or (url or "").startswith("https://www.youtube.com/watch?v=")
+    if media:
+        dur = video_duration(media_json)
+        if dur:
+            return max(1, round(dur / 60))
+    words = word_count if (word_count is not None and word_count > 0) else len((fallback_text or "").split())
+    if words > 0:
+        return max(1, -(-words // 200))
+    return 5
+
+
 def link_plain_urls_soup(soup):
     """Turn explicit web URLs into links in place without touching existing links or code."""
     import re

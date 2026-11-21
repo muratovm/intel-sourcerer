@@ -60,6 +60,8 @@ def connect_database(path):
         db.execute('ALTER TABLE articles ADD COLUMN notes_updated_at TEXT')
     if 'notes_revision' not in columns:
         db.execute('ALTER TABLE articles ADD COLUMN notes_revision INTEGER NOT NULL DEFAULT 0')
+    if 'word_count' not in columns:
+        db.execute('ALTER TABLE articles ADD COLUMN word_count INTEGER')
     db.executescript('''CREATE TABLE IF NOT EXISTS reading_queues (
       id TEXT PRIMARY KEY,created_at TEXT NOT NULL,cursor INTEGER NOT NULL DEFAULT 0,
       finished INTEGER NOT NULL DEFAULT 0 CHECK(finished IN (0,1)));
@@ -178,9 +180,24 @@ def connect_database(path):
     CREATE TRIGGER IF NOT EXISTS manual_indicators_removed AFTER DELETE ON articles
       BEGIN DELETE FROM manual_indicators WHERE article_url=OLD.url; END;""")
     _migrate_tags_to_topics(db)
+    _ensure_word_counts(db)
     _ensure_fts_index(db)
     db.commit()
     return db
+
+
+def _ensure_word_counts(db):
+    """Backfill cached reading_word_count once for articles saved before word_count existed."""
+    rows = db.execute(
+        "SELECT url, content_markdown, content_text, content_html FROM articles WHERE word_count IS NULL"
+    ).fetchall()
+    if not rows:
+        return
+    from .content import reading_word_count
+
+    for row in rows:
+        words = reading_word_count(row["content_markdown"], row["content_text"] or "", row["content_html"])
+        db.execute("UPDATE articles SET word_count=? WHERE url=?", (words, row["url"]))
 
 
 def _migrate_tags_to_topics(db):
@@ -326,18 +343,24 @@ def save_source(db, source):
 
 def save_article(db, source_id, article, *, content, error, reason, discovered_at, markdown=None, media=None, html=None):
     from .boilerplate import title_without_category
+    from .content import reading_word_count
 
-    existing = db.execute("SELECT content_html FROM articles WHERE url=?", (article.url,)).fetchone()
+    existing = db.execute("SELECT content_html, content_markdown, content_text FROM articles WHERE url=?", (article.url,)).fetchone()
     title = title_without_category(article.title, html or (existing[0] if existing else None))
-    db.execute('''INSERT INTO articles (url,source_id,title,published_at,author,summary_html,content_text,content_status,fetch_error,relevance_reason,discovered_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    eff_html = html if markdown else (existing[0] if existing else None)
+    eff_md = markdown if markdown else (existing[1] if existing else None)
+    eff_text = content if content is not None else (existing[2] if existing else "")
+    words = reading_word_count(eff_md, eff_text or "", eff_html)
+    db.execute('''INSERT INTO articles (url,source_id,title,published_at,author,summary_html,content_text,content_status,fetch_error,relevance_reason,discovered_at,word_count) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(url) DO UPDATE SET title=excluded.title,published_at=excluded.published_at,
       author=excluded.author,summary_html=excluded.summary_html,
       content_text=COALESCE(excluded.content_text, articles.content_text),
       content_status=CASE WHEN excluded.content_text IS NOT NULL THEN 'full_text' ELSE articles.content_status END,
-      fetch_error=excluded.fetch_error,relevance_reason=excluded.relevance_reason''',
+      fetch_error=excluded.fetch_error,relevance_reason=excluded.relevance_reason,
+      word_count=excluded.word_count''',
       (article.url, source_id, title, article.published_at.isoformat(), article.author,
-       article.summary_html, content, 'full_text' if content else 'metadata_only', error, reason, discovered_at))
+       article.summary_html, content, 'full_text' if content else 'metadata_only', error, reason, discovered_at, words))
     if markdown:
         import json
-        db.execute('UPDATE articles SET content_markdown=?,content_html=?,media_json=? WHERE url=?', (markdown,html,json.dumps(media or []),article.url))
+        db.execute('UPDATE articles SET content_markdown=?,content_html=?,media_json=?,word_count=? WHERE url=?', (markdown,html,json.dumps(media or []),words,article.url))
     return not bool(existing)

@@ -213,17 +213,18 @@ def handle_api_get(db, database, config, path, query, *, is_admin, read_state_ar
         from urllib.parse import urlencode
 
         cite_href = "/?" + urlencode({"open": row["url"]})
+        source_href = f'href="{row["url"]}"'
         backlinks = [
             {"kind": "article", "title": b["title"], "href": "/?" + urlencode({"open": b["url"]})}
             for b in db.execute(
-                "SELECT url, title FROM articles WHERE url<>? AND instr(notes, ?)>0 ORDER BY julianday(published_at) DESC LIMIT 20",
-                (row["url"], cite_href),
+                "SELECT url, title FROM articles WHERE url<>? AND (instr(notes, ?)>0 OR instr(notes, ?)>0) ORDER BY julianday(published_at) DESC LIMIT 20",
+                (row["url"], cite_href, source_href),
             )
         ] + [
             {"kind": "topic", "title": t["name"], "href": "/topic?" + urlencode({"id": t["id"]})}
             for t in db.execute(
-                "SELECT id, name FROM topics WHERE instr(notes, ?)>0 ORDER BY name COLLATE NOCASE LIMIT 20",
-                (cite_href,),
+                "SELECT id, name FROM topics WHERE instr(notes, ?)>0 OR instr(notes, ?)>0 ORDER BY name COLLATE NOCASE LIMIT 20",
+                (cite_href, source_href),
             )
         ]
         from .indicators import apply_indicator_curation
