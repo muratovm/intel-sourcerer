@@ -9596,3 +9596,19 @@ h3.stat-title+.stat-bars {
   .source-card { grid-template-columns: minmax(0, 1fr); }
   .source-controls { justify-content: start; grid-template-columns: 128px max-content auto auto; }
 }
+
+/* Topic article rows: the actions column fits its buttons and lines up with the title. */
+.topic-article { grid-template-columns: 88px minmax(0, 1fr) auto; align-items: start; padding-right: 4px; }
+.topic-article-date { padding-top: 2px; }
+.topic-article-actions { align-self: start; gap: 2px; }
+.topic-article-queue { white-space: nowrap; min-height: 28px; }
+.topic-article .topic-article-actions .tag-remove { width: 32px; height: 28px; min-height: 28px; margin-top: 0; border-radius: 6px; }
+.topic-article .topic-article-actions .tag-remove:hover { background: var(--ground); }
+@media (max-width: 700px) {
+  .topic-article { grid-template-columns: minmax(0, 1fr) auto; }
+}
+
+/* Home queue rows drag like the Library's queue panel. */
+.gym-queue-item[draggable="true"] { cursor: grab; }
+.gym-queue-item.dragging { opacity: 0.45; }
+.gym-queue-item.drag-target { border-top: 2px solid var(--accent); }
