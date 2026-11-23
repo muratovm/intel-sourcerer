@@ -19,6 +19,8 @@ class PublisherSource:
     notes: str = ""
     enabled: bool = True
     relevance: str = "auto"
+    # Category or archive pages read alongside the feed, for publishers whose feed only holds the latest few posts.
+    listing_urls: tuple[str, ...] = ()
 
     def as_feed(self) -> FeedSource | None:
         return FeedSource(self.name, self.rss_url) if self.enabled and self.rss_url else None
@@ -38,6 +40,10 @@ def load_sources(path: str | Path) -> list[PublisherSource]:
     for record in records:
         if not isinstance(record, dict):
             raise ValueError("Each source must be a TOML table")
+        listing = record.get("listing_urls", ())
+        if not isinstance(listing, (list, tuple)) or not all(isinstance(url, str) for url in listing):
+            raise ValueError("Source listing_urls must be a list of URL strings")
+        record = {**record, "listing_urls": tuple(listing)}
         try:
             source = PublisherSource(**record)
         except TypeError as exc:
@@ -53,8 +59,9 @@ def load_sources(path: str | Path) -> list[PublisherSource]:
         if source.id in seen:
             raise ValueError(f"Duplicate source id: {source.id}")
         seen.add(source.id)
-        for key in ("parent_url", "rss_url", "legacy_parent_url"):
-            value = getattr(source, key)
+        for key, value in [(key, getattr(source, key)) for key in ("parent_url", "rss_url", "legacy_parent_url")] + [
+            ("listing_urls", url) for url in source.listing_urls
+        ]:
             if value is None:
                 continue
             if not isinstance(value, str):

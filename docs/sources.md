@@ -30,7 +30,7 @@ Reviewed October 1, 2026. Twenty sources total, retaining the four initial sourc
 ## Verification and limits
 
 - Existing OpenAI, Google Security, and Google Threat Intelligence feeds passed live checks earlier in this session. Newly configured feeds were fetched and parsed with the project collector; only working feeds were saved.
-- Sophos migrated to www.sophos.com/en-us/blog; its current feed fetched nine articles. The old news.sophos.com endpoints timed out. CrowdStrike’s proposed category URL returned 404, so the working main blog is configured.
+- Sophos migrated to www.sophos.com/en-us/blog; its current feed fetched nine articles. The old news.sophos.com endpoints timed out. CrowdStrike’s proposed category URL returned 404, so the working main blog is configured. Its feed holds only the latest ten posts, so `listing_urls` also reads four category pages (Counter Adversary Operations, Securing AI, From the Front Lines, Engineering & Tech); category feeds don't exist.
 - Anthropic, Elastic Security Labs, and Trend Micro Research remain enabled discovery sources without RSS URLs. The current CLI reports them as skipped. Their inclusion does not mean listing collection is implemented.
 - Google TAG’s former index redirects to Google Security; keep that broad feed distinct from Google Cloud Threat Intelligence.
 - Feed availability and source quality should be reviewed over time. Empty, blocked, or moved endpoints should surface through source health rather than silently removing publishers.

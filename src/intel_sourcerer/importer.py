@@ -1,6 +1,7 @@
 """Import dated cybersecurity articles from enabled AI-lab publishers."""
 import argparse
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 from math import ceil
@@ -150,6 +151,33 @@ def listing_articles(html, source, page_url):
     return list(articles.values())
 
 
+def crowdstrike_listing(html, source, page_url):
+    """Cards on a CrowdStrike blog category page: the whole category, newest first."""
+    soup = BeautifulSoup(html, 'html.parser')
+    articles = {}
+    for card in soup.select('.category_article'):
+        link = card.select_one('.post_info h3 a[href]')
+        date = card.select_one('.publish_info p')
+        published = listing_date(date) if date else None
+        if link is None or published is None:
+            continue
+        url = urljoin(page_url, link['href']).split('#')[0]
+        parsed = urlsplit(url)
+        if parsed.scheme != 'https' or parsed.hostname != 'www.crowdstrike.com' or not parsed.path.startswith('/en-us/blog/'):
+            continue
+        author = card.select_one('.publish_info a[href*="/author."]')
+        summary = card.select_one('.excerpt p')
+        articles.setdefault(url, Article(
+            source.name, link.get_text(' ', strip=True), url, url, published.astimezone(timezone.utc), None,
+            author.get_text(' ', strip=True) if author else None, str(summary) if summary else '',
+        ))
+    return list(articles.values())
+
+
+# Listing parsers by host; a source's listing_urls must be on one of these.
+LISTING_PARSERS = {'www.crowdstrike.com': crowdstrike_listing}
+
+
 # Enough words that the feed holds the post itself, not a teaser.
 FEED_TEXT_MIN_WORDS = 150
 
@@ -219,8 +247,28 @@ async def import_articles(config, database, since, until, *, source_id=None):
                             break
                         except (httpx.HTTPError, ValueError) as exc:
                             report['errors'].append(f'{source.id}: {index}: {exc}')
-                else:
+                elif not source.listing_urls:
                     report['errors'].append(f'{source.id}: no listing adapter')
+                # Category pages reach past the feed's latest few posts. Feed copies win: they can carry the full post.
+                for index in source.listing_urls if source.enabled and not refused else ():
+                    parser = LISTING_PARSERS.get(urlsplit(index).hostname)
+                    if parser is None:
+                        report['errors'].append(f'{source.id}: no listing adapter for {index}')
+                        continue
+                    try:
+                        response = await polite_get(client, index)
+                        found = parser(response.text, source, str(response.url))
+                        if not found: report['errors'].append(f'{source.id}: no dated article cards parsed at {index}')
+                        for article in found:
+                            known = candidates.get(article.url)
+                            # Some feed items carry no description, which leaves the keyword check nothing to read.
+                            if known is None or not known.summary_html:
+                                candidates[article.url] = replace(known, summary_html=article.summary_html) if known else article
+                    except Refused as exc:
+                        refused = exc.refusal
+                        break
+                    except (httpx.HTTPError, ValueError) as exc:
+                        report['errors'].append(f'{source.id}: {index}: {exc}')
                 stats['discovered'] = len(candidates)
                 selected=[]
                 for article in candidates.values():

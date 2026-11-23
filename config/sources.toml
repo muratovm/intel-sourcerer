@@ -95,6 +95,12 @@ enabled = true
 parent_url = "https://www.crowdstrike.com/en-us/blog/"
 rss_url = "https://www.crowdstrike.com/en-us/blog/feed/"
 notes = "Adversary tracking, intrusion campaigns, and frontline threat intelligence. The current blog and working feed include broader product/company posts; relevance filtering is needed."
+listing_urls = [
+  "https://www.crowdstrike.com/en-us/blog/category.counter-adversary-operations/",
+  "https://www.crowdstrike.com/en-us/blog/category.securing-ai/",
+  "https://www.crowdstrike.com/en-us/blog/category.from-the-front-lines/",
+  "https://www.crowdstrike.com/en-us/blog/category.engineering-and-technology/",
+]
 
 [[sources]]
 id = "securelist"
