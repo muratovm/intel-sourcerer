@@ -8,7 +8,6 @@ from .discovery import article_types
 from .http_common import display_timezone
 from .iocs import _attack_names, kev_info
 from .topics import open_questions
-from .youtube import video_duration
 
 THEME_ORDER = ("Vulnerabilities", "AI misuse", "Incident analysis", "Threat research")
 THEME_DESCRIPTIONS = {
