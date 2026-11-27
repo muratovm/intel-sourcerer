@@ -4,6 +4,7 @@ No database, account store, source config, or uploaded files are opened here.
 The browser talks to this origin; only this server knows the backend address
 and service key. Session cookies are forwarded, never interpreted or stored.
 """
+from .article_links import read_path_id
 
 import argparse
 import json
@@ -313,7 +314,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
             if path == "/account":
                 self.render_account(session)
                 return
-            if path == "/":
+            if path == "/" or read_path_id(path):
                 self.page(load_template("workspace/index.html"), session)
                 return
             params = parse_qs(urlsplit(self.path).query)
@@ -348,6 +349,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                     source=params.get("source", [""])[0],
                     topic=params.get("topic", [""])[0],
                     days=params.get("days", [""])[0],
+                    origin=params.get("origin", [""])[0],
                 )
             elif path == "/indicators":
                 from .indicators import indicator_options, render_indicators_page
@@ -390,6 +392,7 @@ def create_viewer(backend_url, service_key, port=8765, host="127.0.0.1"):
                     session["csrf_token"],
                     health=data.get("health"),
                     excluded=data.get("excluded"),
+                    filters=data.get("filters"),
                 )
             else:
                 self.redirect("/account")

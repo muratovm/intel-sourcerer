@@ -114,3 +114,93 @@ def test_in_progress_tab_lists_started_unread_articles(tmp_path):
     db.commit()
     assert 'Glanced report' in render_library(db,progress=True)
     db.close()
+
+
+def test_library_detail_shows_clean_article_preview(tmp_path):
+    import json
+    from intel_sourcerer.library import _banner_image, _preview_excerpt
+
+    db = connect_database(tmp_path / 'articles.sqlite3')
+    save_source(db, PublisherSource('blog', 'Security Blog', 'https://example.com', 'security_blog'))
+    article = Article(
+        'Security Blog',
+        'Ransomware Shift in Q3',
+        'https://example.com/q3',
+        'q3',
+        datetime.now(timezone.utc),
+        None,
+        None,
+        '',
+    )
+    long_body = (
+        'Ransomware Shift in Q3\n'
+        'Security Blog\n'
+        'Overview\n'
+        'Ransomware activity reached record levels this quarter across healthcare and manufacturing. '
+        'Initial access shifted toward edge appliance vulnerabilities rather than phishing macros. '
+        + ('Additional operational telemetry details follow in the full report. ' * 8)
+    )
+    save_article(db, 'blog', article, content=long_body, markdown=long_body, error=None, reason='test', discovered_at='now')
+    media = json.dumps([
+        {'position': 1, 'kind': 'image', 'description': 'Security Blog logo', 'url': 'https://example.com/logo.svg'},
+        {'position': 2, 'kind': 'image', 'description': 'Article header image', 'url': 'https://example.com/banner-q3.jpg'},
+    ])
+    db.execute('UPDATE articles SET media_json=? WHERE url=?', (media, article.url))
+    db.commit()
+
+    page = render_library(db, selected=article.url)
+    assert 'class="lib-article-preview"' in page
+    assert 'https://example.com/banner-q3.jpg' in page
+    assert 'https://example.com/logo.svg' not in page
+    assert page.index('id="lib-topic-editor"') < page.index('class="lib-article-preview"') < page.index('class="lib-note-content"')
+    assert 'Ransomware activity reached record levels this quarter' in page
+    assert 'Overview' not in page.split('lib-article-preview')[1].split('</div>')[0]
+
+    # arXiv-style abstract jumps directly to abstract text.
+    label, paper_excerpt = _preview_excerpt({
+        'title': 'Structured CTI',
+        'publisher': 'arxiv.org',
+        'content_format': 'article',
+        'url': 'https://arxiv.org/abs/2601.00001',
+        'content_text': 'Structured CTI\nJane Doe\nAbstract—Cyber threat intelligence reports can be parsed into STIX graphs automatically.',
+    })
+    assert label == 'Preview'
+    assert paper_excerpt.startswith('Cyber threat intelligence reports can be parsed')
+
+    # Transcribed video strips Whisper boilerplate and timestamps, and gets its YouTube thumbnail.
+    tr_row = {
+        'title': 'CTI Prioritization',
+        'publisher': 'YouTube',
+        'content_format': 'video',
+        'url': 'https://www.youtube.com/watch?v=abc123DEF45',
+        'has_transcript': 1,
+        'content_text': (
+            'Video placeholder: CTI Prioritization Watch on YouTube Channel: SANS '
+            'Transcript Machine transcript made locally with Whisper. '
+            'Check names of actors, malware and tools against the audio. '
+            '0:00 Welcome everyone to our talk on priority intelligence requirements.'
+        ),
+    }
+    tr_label, tr_excerpt = _preview_excerpt(tr_row)
+    assert tr_label == 'Transcript preview'
+    assert tr_excerpt.startswith('Welcome everyone to our talk')
+    assert _banner_image(tr_row) == 'https://i.ytimg.com/vi/abc123DEF45/hqdefault.jpg'
+
+    # Un-transcribed YouTube boilerplate should not render redundant text.
+    empty_label, empty_excerpt = _preview_excerpt({
+        'title': 'Talk',
+        'publisher': 'YouTube',
+        'content_format': 'video',
+        'url': 'https://www.youtube.com/watch?v=def456GHI78',
+        'has_transcript': 0,
+        'content_text': 'YouTube video by SANS.',
+        'summary_html': '',
+    })
+    assert empty_label == '' and empty_excerpt == ''
+
+    # Bare RSS email authors are omitted while human names and handles are kept.
+    from intel_sourcerer.library import _clean_author
+    assert _clean_author('matthewsu@checkpoint.com') == ''
+    assert _clean_author('matthewsu@checkpoint.com (Matthew Su)') == 'Matthew Su'
+    assert _clean_author('Sina Kheirkhah (@SinSinology)') == 'Sina Kheirkhah (@SinSinology)'
+    db.close()

@@ -7,6 +7,147 @@ from urllib.parse import urlsplit
 from .feeds import FeedSource
 
 
+DEFAULT_INCLUDE_KEYWORDS = (
+    "cyber",
+    "distillation",
+    "malicious",
+    "misuse",
+    "espionage",
+    "phishing",
+    "ransomware",
+    "vulnerabilit",
+    "prompt injection",
+    "hacking",
+    "frontier safeguards",
+    "cve-",
+    "exploit",
+    "malware",
+    "backdoor",
+    "intrusion",
+    "zero-day",
+    "adversar",
+    "supply chain",
+    "threat actor",
+    "botnet",
+    "rootkit",
+    "infostealer",
+    "post-exploitation",
+)
+
+DEFAULT_EXCLUDE_KEYWORDS = (
+    "devday",
+    "named a leader",
+    "gartner",
+    "forrester",
+    "now available in aws",
+    "a new generation",
+)
+
+
+def _clean_keywords(values, *, max_items=120):
+    if not isinstance(values, (list, tuple)):
+        raise ValueError("Keywords must be a list of strings.")
+    cleaned = []
+    seen = set()
+    for raw in values:
+        if not isinstance(raw, str):
+            raise ValueError("Each keyword must be a string.")
+        term = " ".join(raw.split()).strip()
+        if not term:
+            continue
+        if len(term) < 2 or len(term) > 80:
+            raise ValueError("Each keyword must be 2–80 characters.")
+        key = term.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(term)
+        if len(cleaned) >= max_items:
+            break
+    return cleaned
+
+
+def load_filters(path: str | Path) -> dict:
+    """Read custom include/exclude keyword lists from [filters] in sources.toml, falling back to built-in defaults."""
+    with Path(path).open("rb") as handle:
+        config = tomllib.load(handle)
+    table = config.get("filters")
+    if isinstance(table, dict) and ("include_keywords" in table or "exclude_keywords" in table):
+        inc = _clean_keywords(table.get("include_keywords", list(DEFAULT_INCLUDE_KEYWORDS)))
+        exc = _clean_keywords(table.get("exclude_keywords", list(DEFAULT_EXCLUDE_KEYWORDS)))
+        return {
+            "include_keywords": inc,
+            "exclude_keywords": exc,
+            "is_custom": True,
+            "defaults": {
+                "include_keywords": list(DEFAULT_INCLUDE_KEYWORDS),
+                "exclude_keywords": list(DEFAULT_EXCLUDE_KEYWORDS),
+            },
+        }
+    return {
+        "include_keywords": list(DEFAULT_INCLUDE_KEYWORDS),
+        "exclude_keywords": list(DEFAULT_EXCLUDE_KEYWORDS),
+        "is_custom": False,
+        "defaults": {
+            "include_keywords": list(DEFAULT_INCLUDE_KEYWORDS),
+            "exclude_keywords": list(DEFAULT_EXCLUDE_KEYWORDS),
+        },
+    }
+
+
+def _write_filters_block(path: str | Path, block: str):
+    import os
+    import re
+    import tempfile
+
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    # Remove any existing top-level [filters] table (up to the next [section] / [[sources]] header).
+    stripped = re.sub(r"(?ms)^\[filters\]\s*\n.*?(?=^\[|\Z)", "", text)
+    if block:
+        first_source = re.search(r"(?m)^\[\[sources\]\]", stripped)
+        if first_source:
+            idx = first_source.start()
+            updated_text = stripped[:idx].rstrip() + "\n\n" + block + "\n" + stripped[idx:]
+        else:
+            updated_text = stripped.rstrip() + "\n\n" + block
+    else:
+        updated_text = re.sub(r"\n{3,}", "\n\n", stripped)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+        temporary = Path(handle.name)
+        handle.write(updated_text)
+    try:
+        load_sources(temporary)
+        load_filters(temporary)
+        os.chmod(temporary, path.stat().st_mode)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def save_filters(path: str | Path, include_keywords, exclude_keywords) -> dict:
+    """Persist custom include/exclude keywords to [filters] in sources.toml atomically."""
+    inc = _clean_keywords(include_keywords)
+    exc = _clean_keywords(exclude_keywords)
+    if not inc:
+        raise ValueError("Keep at least one include keyword (or switch sources to 'Keep all posts').")
+    inc_toml = ", ".join(_toml_quote(term) for term in inc)
+    exc_toml = ", ".join(_toml_quote(term) for term in exc)
+    block = (
+        "[filters]\n"
+        f"include_keywords = [{inc_toml}]\n"
+        f"exclude_keywords = [{exc_toml}]\n"
+    )
+    _write_filters_block(path, block)
+    return load_filters(path)
+
+
+def reset_filters(path: str | Path) -> dict:
+    """Remove custom [filters] from sources.toml to restore built-in defaults."""
+    _write_filters_block(path, "")
+    return load_filters(path)
+
+
 @dataclass(frozen=True)
 class PublisherSource:
     id: str

@@ -15,6 +15,12 @@ UNINFORMATIVE_DESCRIPTIONS = {'no description supplied', 'article header image',
 FIGURE_CAPTION = re.compile(r'(?:(?:figure|fig\.?|table|exhibit|chart|diagram|screenshot|image)\s+\d+[a-z]?\s*[.:—–-]|source\s*:)', re.I)
 
 
+# Publishers whose article sits in a plain container beside site menus, so <main> holds both.
+ARTICLE_ROOTS = {'www.crowdstrike.com': '.container-wp--main-content-blog'}
+# A site-wide share image says nothing about the article, e.g. CrowdStrike's WebShareDefaultImage.
+DEFAULT_SHARE_IMAGE = re.compile(r'default', re.I)
+
+
 FORMAT_LABELS = {'article': 'HTML', 'newsletter': 'HTML', 'paper': 'PDF', 'video': 'Video', 'audio': 'Audio', 'slides': 'Slides', 'social': 'Social', 'repository': 'GitHub'}
 
 
@@ -55,6 +61,10 @@ def prepare_article(html, url, math_node):
         root = main
     else:
         root = max(articles, key=lambda a: len(a.get_text())) if articles else main or soup.body or soup
+    parts = split_url(url)
+    selector = ARTICLE_ROOTS.get(parts.hostname if parts else None)
+    if selector and soup.select_one(selector) is not None:
+        root = soup.select_one(selector)
     # LaTeXML supplies exact TeX alongside MathML; preserve it for KaTeX.
     for math in list(root.find_all('math')):
         tex = math.get('alttext')
@@ -69,7 +79,10 @@ def prepare_article(html, url, math_node):
     for selector in ('meta[property="og:image"]', 'meta[name="twitter:image"]', 'meta[property="twitter:image"]'):
         meta = soup.select_one(selector)
         if meta and safe_url(meta.get('content'), url):
-            header_image = safe_url(meta['content'], url)
+            candidate = safe_url(meta['content'], url)
+            if DEFAULT_SHARE_IMAGE.search(split_url(candidate).path.rsplit('/', 1)[-1]):
+                break
+            header_image = candidate
             break
     alt_meta = soup.select_one('meta[property="og:image:alt"], meta[name="twitter:image:alt"]')
     if alt_meta and alt_meta.get('content'):
@@ -363,6 +376,25 @@ def is_site_chrome_image(description):
     """Share buttons and product icons are page furniture, not article media."""
     import re
     return bool(re.fullmatch(r'(?:[^\s]+\s+){0,7}(?:icon|logo)|(?:up|down|left|right)\s+arrow|link\s+email', ' '.join(description.split()), re.I) or description.strip().lower() in {'icon', 'logo'})
+
+
+def _is_media_placeholder(node):
+    label = node.find('strong') if getattr(node, 'name', None) == 'blockquote' else None
+    return bool(label) and label.get_text().strip().lower() in MEDIA_PLACEHOLDERS
+
+
+def drop_above_title(soup):
+    """Remove the page title and the kicker above it, which the reader shows itself.
+
+    A hero image often sits above the title, so media placeholders there stay.
+    """
+    title = soup.find('h1')
+    if not title:
+        return
+    for node in list(title.previous_siblings):
+        if not _is_media_placeholder(node):
+            node.extract()
+    title.decompose()
 
 
 def arrange_media(soup, title='', base=''):

@@ -62,7 +62,8 @@ function mountTokenEditor(box, options) {
     remove.className = "tag-token-remove";
     remove.textContent = "×";
     remove.setAttribute("aria-label", item.removeLabel);
-    remove.onclick = () => {
+    remove.onclick = async () => {
+      await window.intelMagic?.banish(wrap, { tone: "arcane", count: 12 });
       send(item.remove);
     };
     wrap.append(link, remove);

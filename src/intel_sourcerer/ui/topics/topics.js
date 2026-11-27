@@ -303,6 +303,7 @@ if (page) {
           notice(`Queue is full (${MAX_QUEUE_ITEMS} articles max). Finish or remove one to add more.`);
           return;
         }
+        window.intelMagic?.fly(btn, () => document.querySelector('.builder-links a[href="/library"]'), { tone: "arcane" });
         updateTopicQueue([...activeQueueURLs, url]);
       }
     });
@@ -376,7 +377,11 @@ if (page) {
   document.querySelectorAll("[data-remove]").forEach((button) => {
     button.addEventListener("click", () =>
       saveThen(async () => {
-        await api("/api/topic-article-delete", { id: topicId, url: button.dataset.remove });
+        const row = button.closest(".topic-article");
+        await Promise.all([
+          window.intelMagic?.banish(row, { tone: "arcane" }),
+          api("/api/topic-article-delete", { id: topicId, url: button.dataset.remove }),
+        ]);
         location.reload();
       }),
     );
@@ -393,6 +398,10 @@ if (page) {
       link.textContent = button.dataset.label;
       focusNotes();
       document.execCommand("insertHTML", false, link.outerHTML + "&nbsp;");
+      const inserted = [...$("notes").querySelectorAll("a")]
+        .reverse()
+        .find((a) => a.getAttribute("href") === button.dataset.cite);
+      window.intelMagic?.shimmer(inserted, { tone: "arcane" });
       citeMenu.open = false;
       noteChanged();
     });
@@ -493,9 +502,13 @@ if (page) {
         dismiss.setAttribute("aria-label", `Stop suggesting ${item.title} for this topic`);
         dismiss.onclick = async () => {
           try {
-            await api("/api/topic-dismiss", { id: topicId, url: item.url });
+            await Promise.all([
+              window.intelMagic?.banish(row, { tone: "arcane" }),
+              api("/api/topic-dismiss", { id: topicId, url: item.url }),
+            ]);
             renderInsights(await api("/api/topic-insights?" + new URLSearchParams({ id: topicId })));
           } catch (error) {
+            row.removeAttribute("data-banishing");
             notice(error.message);
           }
         };

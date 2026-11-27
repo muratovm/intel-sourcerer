@@ -43,6 +43,38 @@ if (textSmaller && textLarger && textReset && textValue) {
   textReset.addEventListener("click", () => setScale(1));
 }
 
+// Arcane visual effects preference synced with window.intelMagic.
+function initMagicPref() {
+  const magicSelect = document.getElementById("account-magic");
+  if (!magicSelect) return;
+  const fallbackRead = () => {
+    try {
+      return localStorage.getItem("intel-magic") || "balanced";
+    } catch {
+      return "balanced";
+    }
+  };
+  magicSelect.value = window.intelMagic ? window.intelMagic.getMode() : fallbackRead();
+  magicSelect.addEventListener("change", () => {
+    if (window.intelMagic) {
+      window.intelMagic.setMode(magicSelect.value);
+      if (magicSelect.value !== "off") {
+        window.intelMagic.puff(magicSelect, { tone: "arcane", count: 18 });
+      }
+    } else {
+      try {
+        localStorage.setItem("intel-magic", magicSelect.value);
+      } catch {}
+      document.documentElement.dataset.magic = magicSelect.value;
+    }
+  });
+}
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initMagicPref);
+} else {
+  initMagicPref();
+}
+
 // Offline Service Worker cache inspection and clear action.
 const cacheStatus = document.getElementById("account-cache-status");
 const clearCacheBtn = document.getElementById("account-clear-cache");

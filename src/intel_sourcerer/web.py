@@ -1,4 +1,5 @@
 """A small, browser interface for saved articles."""
+from .article_links import read_path_id
 
 import argparse
 import asyncio
@@ -41,7 +42,7 @@ from .net_safety import (
 )
 from .sessions import SessionError, session_db
 from .storage import BUSY_TIMEOUT, connect_database
-from .templates import SETUP_FIELD, UI_ROOT, load_template, render_template
+from .templates import SETUP_FIELD, UI_ROOT, load_template, render_template, versioned
 
 VALID_DISCOVERY_DAYS = {0, 1, 3, 7, 14, 30, 60, 90, 180, 365}
 
@@ -52,6 +53,7 @@ APP_HEAD = (
     '<meta name="theme-color" content="#071f4a" />'
     '<link rel="apple-touch-icon" href="/icon-192.png" />'
     '<script src="/app.js"></script>'
+    '<script src="/magic.js" defer></script>'
 )
 ACCOUNT_LINK = '<a href="/account">Account</a>'
 STATIC_FILES = {
@@ -107,6 +109,7 @@ def read_state_articles(database):
 
 
 def render_sources(config, csrf_token="", database=None):
+    from .config import load_filters
     from .source_view import recent_excluded, render_sources_list, source_health
 
     health = None
@@ -115,7 +118,14 @@ def render_sources(config, csrf_token="", database=None):
         with closing(connect_database(database)) as db:
             health = source_health(db)
             excluded = recent_excluded(db)
-    return render_sources_list(load_sources(config), csrf_token, str(config), health=health, excluded=excluded)
+    return render_sources_list(
+        load_sources(config),
+        csrf_token,
+        str(config),
+        health=health,
+        excluded=excluded,
+        filters=load_filters(config),
+    )
 
 
 def create_server(
@@ -527,7 +537,7 @@ def create_server(
                     elif not accounts:
                         # With no accounts there is no Account page to hold the stats.
                         body = body.replace("<!-- account-link -->", '<a href="/stats">Stats</a>')
-                    body = body.replace("</title>", "</title>" + APP_HEAD, 1)
+                    body = body.replace("</title>", "</title>" + versioned(APP_HEAD), 1)
                 body = body.encode()
             self.send_response(status)
             self.send_header("Content-Type", content_type)
@@ -681,6 +691,7 @@ def create_server(
                                 source=params.get("source", [""])[0],
                                 topic=params.get("topic", [""])[0],
                                 days=params.get("days", [""])[0],
+                                origin=params.get("origin", [""])[0],
                             ),
                             "text/html; charset=utf-8",
                         )
@@ -848,7 +859,7 @@ def create_server(
                 except OSError:
                     self.respond({"error": "Source configuration unavailable."}, status=500)
                 return
-            if path == "/":
+            if path == "/" or read_path_id(path):
                 content = load_template("workspace/index.html").replace("__TOKEN__", csrf_token)
                 self.respond(content, "text/html; charset=utf-8")
                 return
@@ -1058,6 +1069,32 @@ def create_server(
                         with user_lock:
                             set_source_relevance(config, data.get("id", ""), data.get("relevance", ""))
                         self.respond({"id": data.get("id"), "relevance": data.get("relevance")})
+                        return
+                    if path == "/api/source-filters":
+                        from .config import reset_filters, save_filters
+
+                        with user_lock:
+                            if data.get("reset"):
+                                updated = reset_filters(config)
+                            else:
+                                updated = save_filters(
+                                    config,
+                                    data.get("include_keywords", []),
+                                    data.get("exclude_keywords", []),
+                                )
+                        self.respond({"filters": updated})
+                        return
+                    if path == "/api/excluded-dismiss":
+                        from .source_view import dismiss_excluded
+
+                        urls = data.get("urls")
+                        if isinstance(data.get("url"), str) and not urls:
+                            urls = [data["url"]]
+                        if not isinstance(urls, list) or not all(isinstance(u, str) for u in urls):
+                            raise ValueError("Provide article URLs to dismiss.")
+                        with user_lock, closing(connect_database(database)) as dismiss_db, dismiss_db:
+                            count = dismiss_excluded(dismiss_db, urls)
+                        self.respond({"dismissed": count})
                         return
                     if path == "/api/jobs/check-source":
                         source_id = data.get("id", "")

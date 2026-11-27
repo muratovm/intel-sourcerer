@@ -1,4 +1,5 @@
 """Searchable local article and notes library."""
+from .article_links import article_href
 
 import json
 from pathlib import Path
@@ -15,6 +16,223 @@ from markdownify import markdownify
 from .sessions import has_notes
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+_BULLET_RE = re.compile(r"^(?:[-*•–—]\s+)+")
+_ABSTRACT_RE = re.compile(r"^abstract(?:\s*[—–:\-]\s*(.*))?$", re.I)
+_SHORTCODE_RE = re.compile(r"^\[[^\]]+\]$")
+_DATE_LINE_RE = re.compile(
+    r"^(?:(?:published|updated|posted)\s*:?\s*)?"
+    r"(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})$",
+    re.I,
+)
+_BOILERPLATE_LINE_RE = re.compile(
+    r"^(?:subscribe\b|sign up\b|share this\b|read more\b|written by\b|authored by\b|posted by\b|"
+    r"image placeholder:|video placeholder:|view original image$|watch on youtube$)",
+    re.I,
+)
+_GENERIC_HEADINGS = {
+    "overview",
+    "introduction",
+    "summary",
+    "executive summary",
+    "background",
+    "key takeaways",
+    "highlights",
+    "table of contents",
+    "contents",
+    "threat intelligence",
+    "blog",
+}
+_TRANSCRIPT_BOILERPLATE_RE = re.compile(
+    r"^(?:.*?transcript\s+)?(?:machine transcript made locally with whisper\.?\s*"
+    r"(?:check names of actors,\s*malware and tools against the audio\.?\s*)?)?(?:\d{1,2}:\d{2}(?::\d{2})?\s*)*",
+    re.I | re.S,
+)
+
+
+_ABBREV_END_RE = re.compile(
+    r"(?:\b(?:jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec|dr|mr|mrs|ms|prof|st|vs|no|fig|al|inc|ltd|corp|u\.s|e\.g|i\.e))\.$",
+    re.I,
+)
+_INLINE_ABSTRACT_RE = re.compile(r"\babstract\s*[:—–\-]\s*", re.I)
+
+
+def _norm(text):
+    return _NON_ALNUM_RE.sub(" ", (text or "").casefold()).strip()
+
+
+def _truncate_preview(text, max_chars=600):
+    clean = " ".join((text or "").split())
+    if len(clean) <= max_chars:
+        return clean
+    window = clean[: max_chars + 1]
+    min_sentence = max(150, int(max_chars * 0.55))
+    best_end = -1
+    for match in re.finditer(r"[.!?](?:\s|$)", window):
+        if match.start() >= min_sentence and not _ABBREV_END_RE.search(window[: match.start() + 1]):
+            best_end = match.start() + 1
+    if best_end > 0:
+        return clean[:best_end].strip()
+    cut = clean[:max_chars].rsplit(" ", 1)[0].rstrip(" ,;:-–—")
+    return (cut or clean[:max_chars]).rstrip() + "…"
+
+
+def _strip_summary_html(summary_html):
+    if not summary_html:
+        return ""
+    soup = BeautifulSoup(summary_html, "html.parser")
+    for toc in soup.select("details.post-contents, nav, script, style"):
+        toc.decompose()
+    return " ".join(soup.get_text(" ", strip=True).split())
+
+
+def _preview_excerpt(row, max_chars=600):
+    """Build a short, clean (label, excerpt) preview of the selected article for the library side panel."""
+    raw_text = (row.get("content_text") or row.get("preview_text") or "").strip()
+    title_norm = _norm(row.get("title"))
+    pub_norm = _norm(row.get("publisher"))
+    author_norm = _norm(row.get("author"))
+    media = row.get("content_format") in {"audio", "video"} or (row.get("url") or "").startswith(
+        "https://www.youtube.com/watch?v="
+    )
+
+    if media:
+        has_tr = bool(row.get("has_transcript")) or "machine transcript" in raw_text.casefold() or "transcript" in raw_text[:260].casefold()
+        if has_tr and raw_text:
+            body = _TRANSCRIPT_BOILERPLATE_RE.sub("", raw_text).strip()
+            body = re.sub(r"\b\d{1,2}:\d{2}(?::\d{2})?\s+", "", body)
+            if body:
+                return ("Transcript preview", _truncate_preview(body, max_chars))
+        summary = _strip_summary_html(row.get("summary_html"))
+        if summary and not summary.casefold().startswith("youtube video by "):
+            return ("Preview", _truncate_preview(summary, max_chars))
+        return ("", "")
+
+    text = ""
+    if raw_text:
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        # PDF text extraction sometimes puts one word per line; collapse whitespace first in that case.
+        sample = lines[:20]
+        if len(sample) >= 12 and sum(1 for ln in sample if len(ln) <= 10) > len(sample) // 2:
+            collapsed = " ".join(lines)
+            abs_match = _INLINE_ABSTRACT_RE.search(collapsed[:1200])
+            if abs_match:
+                collapsed = collapsed[abs_match.end() :].strip()
+            elif row.get("title") and collapsed.casefold().startswith(row["title"].strip().casefold()):
+                collapsed = collapsed[len(row["title"].strip()) :].lstrip(" :—–-")
+            text = collapsed
+        else:
+            start = 0
+            abstract_prefix = ""
+            for idx, line in enumerate(lines[:30]):
+                m = _ABSTRACT_RE.match(line)
+                if m:
+                    start = idx + 1
+                    abstract_prefix = (m.group(1) or "").strip()
+                    break
+            kept = []
+            if abstract_prefix:
+                kept.append(abstract_prefix)
+            body_lines = lines[start:]
+            skipping_front = not bool(abstract_prefix)
+            for line in body_lines:
+                cleaned_line = _BULLET_RE.sub("", line).strip()
+                if not cleaned_line:
+                    continue
+                if skipping_front:
+                    low = _norm(cleaned_line)
+                    if (
+                        not low
+                        or (title_norm and (low == title_norm or (len(low) >= 12 and low in title_norm)))
+                        or (pub_norm and (low == pub_norm or low in pub_norm or (pub_norm in low and len(low) <= len(pub_norm) + 20)))
+                        or (author_norm and low == author_norm)
+                        or low in _GENERIC_HEADINGS
+                        or _SHORTCODE_RE.match(cleaned_line)
+                        or _DATE_LINE_RE.match(cleaned_line)
+                        or _BOILERPLATE_LINE_RE.match(cleaned_line)
+                        or (len(cleaned_line) <= 24 and " " not in cleaned_line and not re.search(r"[.!?]$", cleaned_line))
+                        or (len(cleaned_line) <= 28 and cleaned_line.endswith(":"))
+                    ):
+                        continue
+                    skipping_front = False
+                kept.append(cleaned_line)
+                if sum(len(part) for part in kept) >= max_chars * 2:
+                    break
+            text = " ".join(kept)
+
+    if not text:
+        summary = _strip_summary_html(row.get("summary_html"))
+        if summary and not _BOILERPLATE_LINE_RE.match(summary):
+            text = summary
+
+    if not text:
+        return ("", "")
+    return ("Preview", _truncate_preview(text, max_chars))
+
+
+_BANNER_SKIP_URL_RE = re.compile(
+    r"(?:\.(?:svg|ico)(?:[?#]|$)|(?:/|[_\-.])(?:logo|favicon|avatar|icon|single-bg|sprite|badge)(?:[_\-./?#]|$))",
+    re.I,
+)
+_BANNER_SKIP_DESC_RE = re.compile(r"(?:\blogo\b|\bicon\b|\barrow\b|\bavatar\b|\bfavicon\b)", re.I)
+
+
+def _banner_image(row):
+    """Pick the article's hero/banner image URL from media_json (or YouTube thumbnail), skipping logos and icons."""
+    from urllib.parse import urlsplit
+    from .youtube import video_id
+
+    pub_norm = _norm(row.get("publisher"))
+    try:
+        items = json.loads(row.get("media_json") or "[]")
+    except (TypeError, ValueError):
+        items = []
+    if isinstance(items, list):
+        images = [item for item in items if isinstance(item, dict) and item.get("kind") == "image"]
+        for item in images[:6]:
+            url = (item.get("url") or "").strip()
+            if not url:
+                continue
+            parsed = urlsplit(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                continue
+            desc = (item.get("description") or "").strip()
+            desc_norm = _norm(desc)
+            if _BANNER_SKIP_URL_RE.search(url):
+                continue
+            if _BANNER_SKIP_DESC_RE.search(desc):
+                continue
+            if pub_norm and desc_norm and (desc_norm == pub_norm or desc_norm in pub_norm):
+                continue
+            return url
+    try:
+        vid = video_id(row.get("url") or "")
+    except ValueError:
+        vid = None
+    if vid:
+        return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+    return ""
+
+
+def article_preview(row):
+    label, excerpt = _preview_excerpt(row)
+    banner = _banner_image(row)
+    if not excerpt and not banner:
+        return ""
+    heading = label or "Preview"
+    img_html = (
+        f'<img class="lib-preview-banner" src="{escape(banner, quote=True)}" '
+        'alt="" width="640" height="360" decoding="async" referrerpolicy="no-referrer" />'
+        if banner
+        else ""
+    )
+    text_html = f'<p class="lib-preview-text">{escape(excerpt)}</p>' if excerpt else ""
+    return (
+        '<div class="lib-article-preview">'
+        f'<p class="lib-preview-label">{escape(heading)}</p>'
+        f"{img_html}{text_html}"
+        "</div>"
+    )
 
 
 def _fast_plain(text, fmt):
@@ -44,8 +262,24 @@ def _host(url):
     return (parts.hostname or "").removeprefix("www.") if parts.scheme in {"http", "https"} else ""
 
 
+_BARE_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+_EMAIL_WITH_NAME_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+\s*\(([^)]+)\)$")
+
+
+def _clean_author(raw):
+    text = " ".join((raw or "").split())
+    if not text:
+        return ""
+    named = _EMAIL_WITH_NAME_RE.match(text)
+    if named:
+        return named.group(1).strip()
+    if _BARE_EMAIL_RE.match(text):
+        return ""
+    return text
+
+
 def resource_details(row):
-    """Facts about the selected item for the library's side panel: length, maker, transcript, topics, source."""
+    """Facts about the selected item for the library's side panel: status, length, source, added, author."""
     from .content import reading_word_count
     from .transcripts import has_transcript
     from .youtube import video_duration
@@ -57,27 +291,45 @@ def resource_details(row):
     read_dur = f"{mins // 60}h {mins % 60}m" if mins >= 60 and mins % 60 else f"{mins // 60}h" if mins >= 60 else f"{mins} min"
     read = f"~{read_dur} read · {words:,} words" if words else ""
     facts = []
+
+    progress_text = _progress_label(row)
+    if row.get("is_read"):
+        status_html = '<span class="lib-status lib-status-read">Read</span>'
+    elif progress_text:
+        status_html = f'<span class="lib-status lib-status-progress">{escape(progress_text)}</span>'
+    else:
+        status_html = '<span class="lib-status lib-status-unread">Unread</span>'
+    facts.append(("Status", status_html, False))
+
     if media:
         duration = video_duration(row.get("media_json"))
-        facts.append(("Length", format_length(duration) if duration else "Unknown"))
-        facts.append(("Transcript", read if transcribed else "Not transcribed yet"))
+        facts.append(("Length", format_length(duration) if duration else "Unknown", False))
+        facts.append(("Transcript", read if transcribed else "Not transcribed yet", False))
     elif read:
-        facts.append(("Length", read))
-    author = (row.get("author") or "").strip()
-    if not author and media:
-        # Videos saved before the channel reached the author column keep it on a "Channel:" line.
-        import re
-        found = re.search(r"^Channel: (.+)$", row.get("content_markdown") or "", re.M)
-        author = found[1].strip() if found else ""
-    if author and author.casefold() != (row.get("publisher") or "").casefold():
-        facts.append(("Channel" if media else "Author", escape(author)))
-    facts.append(("Status", "Read" if row.get("is_read") else _progress_label(row) or "Unread"))
-    if row.get("discovered_at"):
-        facts.append(("Added", escape(short_date(row["discovered_at"]))))
+        facts.append(("Length", read, False))
+
     host = _host(row["url"])
     if host:
-        facts.append(("Source", f'<a href="{escape(row["url"], quote=True)}" target="_blank" rel="noopener noreferrer">{escape(host)} ↗</a>'))
-    rows = "".join(f"<dt>{label}</dt><dd>{value}</dd>" for label, value in facts)
+        facts.append((
+            "Source",
+            f'<a href="{escape(row["url"], quote=True)}" target="_blank" rel="noopener noreferrer">{escape(host)} ↗</a>',
+            False,
+        ))
+    if row.get("discovered_at"):
+        facts.append(("Added", escape(short_date(row["discovered_at"])), False))
+
+    author = _clean_author(row.get("author"))
+    if not author and media:
+        # Videos saved before the channel reached the author column keep it on a "Channel:" line.
+        found = re.search(r"^Channel: (.+)$", row.get("content_markdown") or "", re.M)
+        author = _clean_author(found[1]) if found else ""
+    if author and author.casefold() != (row.get("publisher") or "").casefold():
+        facts.append(("Channel" if media else "Author", escape(author), len(author) > 42))
+
+    rows = "".join(
+        f'<div class="lib-fact{" lib-fact-wide" if wide else ""}"><dt>{label}</dt><dd>{value}</dd></div>'
+        for label, value, wide in facts
+    )
     return f'<dl class="lib-facts">{rows}</dl>'
 
 
@@ -164,10 +416,10 @@ def fts_match_urls(db, query):
         return None
 
 
-def render_library(db, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None, kind="", progress=False, page=1, page_size=DEFAULT_PAGE_SIZE, unread_only=False, source="", topic="", days=""):
+def render_library(db, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None, kind="", progress=False, page=1, page_size=DEFAULT_PAGE_SIZE, unread_only=False, source="", topic="", days="", origin=""):
     rows = library_rows(db, selected=selected, include_body_text=bool(query))
     fts_urls = fts_match_urls(db, query) if query else None
-    return render_library_rows(rows, query, notes_only, selected, csrf_token, tag, storage, kind, progress, page=page, page_size=page_size, fts_urls=fts_urls, unread_only=unread_only, source=source, topic=topic, days=days)
+    return render_library_rows(rows, query, notes_only, selected, csrf_token, tag, storage, kind, progress, page=page, page_size=page_size, fts_urls=fts_urls, unread_only=unread_only, source=source, topic=topic, days=days, origin=origin)
 
 
 def _folder_bytes(folder):
@@ -205,6 +457,11 @@ def library_summary(total, storage):
     return text
 
 
+# Articles saved by hand, as opposed to found by an enabled source.
+ORIGIN_LABELS = {"manual": "By you", "sources": "By sources"}
+ADDED_BADGE = '<span class="lib-added" title="Added manually, not found by a source">Added by you</span>'
+
+
 def library_rows(db, selected="", include_body_text=False):
     """Read private library records at the backend boundary without serializing full HTML/Markdown for every row."""
     target = selected
@@ -219,13 +476,15 @@ def library_rows(db, selected="", include_body_text=False):
         dict(row)
         for row in db.execute(
             f"""SELECT a.url,a.source_id,a.title,a.published_at,a.author,{body_col},
+            substr(coalesce(a.content_text,''), 1, 2400) AS preview_text,
+            substr(coalesce(a.summary_html,''), 1, 1200) AS summary_html,
             a.content_status,
             a.discovered_at,a.content_format,a.media_json,a.word_count,a.is_read,a.notes,a.notes_format,a.notes_updated_at,
             a.notes_revision,a.triage,
             CASE WHEN a.url=? THEN a.content_html END AS content_html,
             CASE WHEN a.url=? THEN a.content_markdown END AS content_markdown,
             CASE WHEN a.url=? THEN instr(coalesce(a.content_markdown,''), char(10)||char(10)||'## Transcript'||char(10))>0 ELSE 0 END AS has_transcript,
-            s.name AS publisher,
+            s.name AS publisher,s.source_type,
             (SELECT json_group_array(h.quote) FROM (SELECT quote FROM article_highlights WHERE article_url=a.url ORDER BY created_at,id) h) AS highlights_json,
             (SELECT json_group_array(t.name) FROM (SELECT tp.name FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=a.url ORDER BY tp.name COLLATE NOCASE) t) AS tags_json,
             (SELECT json_group_array(json_object('id',p.id,'name',p.name)) FROM (SELECT tp.id,tp.name FROM topic_articles ta JOIN topics tp ON tp.id=ta.topic_id WHERE ta.article_url=a.url ORDER BY tp.name COLLATE NOCASE) p) AS topics_json,
@@ -261,13 +520,14 @@ TIMEFRAME_OPTIONS = (
 )
 
 
-def render_library_rows(rows, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None, kind="", progress=False, page=1, page_size=DEFAULT_PAGE_SIZE, fts_urls=None, unread_only=False, source="", topic="", days=""):
+def render_library_rows(rows, query="", notes_only=False, selected="", csrf_token="", tag="", storage=None, kind="", progress=False, page=1, page_size=DEFAULT_PAGE_SIZE, fts_urls=None, unread_only=False, source="", topic="", days="", origin=""):
     """Render a library from backend JSON without opening a database."""
     from datetime import timedelta, timezone
     from .sessions import clean_notes
 
     progress = progress and not notes_only
     unread_only = unread_only and not notes_only and not progress
+    origin = origin if origin in ORIGIN_LABELS else ""
     days_int = int(days) if str(days or "").isdigit() and int(days) > 0 else 0
     days_cutoff = (datetime.now(timezone.utc) - timedelta(days=days_int)).isoformat() if days_int else ""
     terms = query.casefold().split()
@@ -275,6 +535,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
     counts = {}
     kinds = {}
     sources_counts = {}
+    origin_counts = {"manual": 0, "sources": 0}
     topics_counts = {}
     topics_names = {}
     parsed_tags = {}
@@ -289,6 +550,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
     for row in rows:
         url = row["url"]
         kinds[_kind(row)] = kinds.get(_kind(row), 0) + 1
+        origin_counts["manual" if row.get("source_type") == "manual" else "sources"] += 1
         pub = row["publisher"]
         sources_counts[pub] = sources_counts.get(pub, 0) + 1
         if not row.get("is_read"):
@@ -326,6 +588,8 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
         if topic and topic not in {tp["id"] for tp in parsed_topics[url]} and topic.casefold() not in {name.casefold() for name in tags}:
             continue
         if days_cutoff and (row.get("published_at") or "") < days_cutoff:
+            continue
+        if origin and (row.get("source_type") == "manual") != (origin == "manual"):
             continue
         if unread_only and row.get("is_read"):
             continue
@@ -368,10 +632,12 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             base["topic"] = topic
         if days_int:
             base["days"] = str(days_int)
+        if origin:
+            base["origin"] = origin
         if current_page > 1 and "page" not in kwargs:
             base["page"] = str(current_page)
         params = dict(base, **kwargs)
-        for opt_key in ("unread", "source", "topic", "days"):
+        for opt_key in ("unread", "source", "topic", "days", "origin"):
             if params.get(opt_key) in {"", "0", 0, None}:
                 params.pop(opt_key, None)
         if params.get("page") in {"1", 1, "", None}:
@@ -385,7 +651,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
     for row in visible:
         is_active = active["url"] == row["url"]
         fraction = row.get("position_fraction") or 0
-        badges = (
+        badges = (ADDED_BADGE if row.get("source_type") == "manual" else "") + (
             read_badge_html
             if row["is_read"]
             else f'<span class="lib-progress">{round(fraction * 100)}% read</span>'
@@ -428,7 +694,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             notes += '<h3 class="lib-highlights-heading">Highlights</h3>' + "".join(
                 f'<blockquote class="lib-highlight">{escape(quote)}</blockquote>' for quote in quotes
             )
-        opened = escape("/?" + urlencode({"open": active["url"]}), quote=True)
+        opened = escape(article_href(active["url"], active["title"]), quote=True)
         exported = escape("/export?" + urlencode({"url": active["url"]}), quote=True)
         exported_csv = escape("/export?" + urlencode({"url": active["url"], "format": "csv"}), quote=True)
         exported_stix = escape("/export?" + urlencode({"url": active["url"], "format": "stix"}), quote=True)
@@ -443,6 +709,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             edited=edited,
             title=escape(active["title"]),
             publisher=escape(active["publisher"]),
+            origin=" · Added by you" if active.get("source_type") == "manual" else "",
             minutes=str(_estimate_minutes(active)),
             format_label=(active_label := format_label(active["content_format"], active["publisher"])),
             format_class=active_label.lower(),
@@ -453,6 +720,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
             exported_stix=exported_stix,
             exported_nav=exported_nav,
             url=escape(active["url"], quote=True),
+            preview=article_preview(active),
             notes=notes,
             details=resource_details(active),
         )
@@ -524,7 +792,24 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
         f'<details class="lib-filter-menu"><summary>{escape(days_summary)}</summary>'
         f'<div class="lib-tag-list">{days_links}</div></details>{days_clear}'
     )
+    origin_links = "".join(
+        f'<a class="lib-tag-option{" active" if value == origin else ""}" '
+        f'{"aria-current=true " if value == origin else ""}'
+        f'href="{link(origin="" if value == origin else value, page="1")}">{label} <span>{origin_counts[value]}</span></a>'
+        for value, label in ORIGIN_LABELS.items()
+    )
+    origin_clear = f'<a class="lib-tag-clear" aria-label="Clear added-by filter" href="{link(origin="", page="1")}">×</a>' if origin else ""
+    origin_filter = (
+        f'<details class="lib-filter-menu"><summary>{"Added " + ORIGIN_LABELS[origin].casefold() if origin else "Added by"}</summary>'
+        f'<div class="lib-tag-list">{origin_links}</div></details>{origin_clear}'
+        if origin_counts["manual"] or origin
+        else ""
+    )
     active_filter_chips = []
+    if origin:
+        active_filter_chips.append(
+            f'<span class="lib-active-chip">Added {ORIGIN_LABELS[origin].casefold()} <a aria-label="Clear added-by filter" href="{link(origin="", page="1")}">×</a></span>'
+        )
     if source:
         active_filter_chips.append(
             f'<span class="lib-active-chip">Source: {escape(source)} <a aria-label="Clear source filter" href="{link(source="", page="1")}">×</a></span>'
@@ -571,6 +856,8 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
         topic_filter=topic_filter,
         days=str(days_int) if days_int else "",
         days_filter=days_filter,
+        origin=origin,
+        origin_filter=origin_filter,
         filters_label=escape(filters_label),
         filters_active_class=filters_active_class,
         active_chips=active_chips_html,
@@ -590,7 +877,7 @@ def render_library_rows(rows, query="", notes_only=False, selected="", csrf_toke
         article_rows="".join(items)
         or (
             '<p class="muted">Nothing in progress. Articles you start reading, note or highlight show up here until you mark them read.</p>'
-            if progress and not terms and not tag and not kind and not source and not topic and not days_int
+            if progress and not terms and not tag and not kind and not source and not topic and not days_int and not origin
             else '<p class="muted">No results</p>'
         ),
         pagination=pagination,

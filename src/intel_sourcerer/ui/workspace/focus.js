@@ -147,6 +147,8 @@
         article.is_read = true;
         currentArticle.is_read = true;
         element("article-meta").textContent = readerMetadata(currentArticle);
+        window.syncStandaloneReadUI?.();
+        window.intelMagic?.celebrate(element("focus-status"), { tone: "emerald", intensity: 1.25 });
         const seconds = session.elapsed_seconds;
         message(
           `Session saved · ${seconds <= session.target_seconds ? "Within target" : "Over target"} · ${clock(seconds)} active · ${Math.round(session.word_count / Math.max(seconds / 60, 1 / 60))} words/min. ${document.body.classList.contains("temporary-session") ? "Timing stays in this tab; export to keep it." : "Your reading stats are updated."}`,

@@ -27,6 +27,7 @@ SHARED_STATIC_FILES = {
     "/topics.js": ("topics/topics.js", "text/javascript; charset=utf-8"),
     "/account.js": ("auth/account.js", "text/javascript; charset=utf-8"),
     "/sources.js": ("sources/sources.js", "text/javascript; charset=utf-8"),
+    "/magic.js": ("shared/magic.js", "text/javascript; charset=utf-8"),
     "/vendor/katex/katex.min.js": (
         "vendor/katex/katex.min.js",
         "text/javascript; charset=utf-8",

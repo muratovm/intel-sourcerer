@@ -11,26 +11,35 @@
   <body>
     <main class="sources-page">
       <!-- header: /sources -->
-      <h1>Sources</h1>
-      <p class="muted">
-        ${source_count} configured sources ·
-        ${enabled_count} enabled
-      </p>
-      <p class="muted">Configuration: ${config_path}</p>
-      <section class="sources-check-all" aria-label="Check all sources for new articles">
-        <div class="sources-check-row">
-          <button type="button" id="check-all-sources" class="primary">Check all sources for new articles</button>
-          <label>Look back
-            <select id="check-all-days">
-              <option value="7">7 days</option>
-              <option value="30" selected>30 days</option>
-              <option value="90">90 days</option>
-            </select>
-          </label>
+      <div class="sources-hero">
+        <div class="sources-title-row">
+          <div class="sources-heading">
+            <h1>Sources</h1>
+            <p class="sources-summary">
+              <span class="sources-enabled-pill">${enabled_count} enabled</span>
+              <span aria-hidden="true">·</span>
+              <span>${source_count} configured</span>
+              ${config_badge}
+            </p>
+          </div>
+          <div class="sources-check-all" role="region" aria-label="Check all sources for new articles">
+            <label class="sources-lookback" for="check-all-days">
+              <span>Look back</span>
+              <select id="check-all-days">
+                <option value="7">7 days</option>
+                <option value="30" selected>30 days</option>
+                <option value="90">90 days</option>
+              </select>
+            </label>
+            <button type="button" id="check-all-sources" class="primary" title="Check all enabled sources for new articles">Check all sources</button>
+          </div>
         </div>
-        <p id="check-all-status" class="muted" role="status" hidden></p>
-        <ul id="check-all-results" class="sources-check-results" hidden></ul>
-      </section>
+        <div class="sources-check-feedback">
+          <p id="check-all-status" class="muted" role="status" hidden></p>
+          <ul id="check-all-results" class="sources-check-results" hidden></ul>
+        </div>
+      </div>
+      ${review_section}
       <section class="custom-source-box" aria-label="Add custom RSS or Atom feed">
         <h2>Add custom RSS/Atom feed</h2>
         <form id="custom-source-form" class="custom-source-form">
@@ -51,7 +60,6 @@
         <p id="source-feedback" class="muted" role="status" hidden></p>
       </section>
       ${source_groups}
-      ${excluded_section}
     </main>
   </body>
 </html>

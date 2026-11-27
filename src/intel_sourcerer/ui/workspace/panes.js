@@ -2,26 +2,57 @@
 
 const $ = (id) => document.getElementById(id);
 
-export function initPaneDivider({ storagePrefix, readItem, writeItem }) {
+export function initPaneDivider({ storagePrefix, readItem, writeItem, beforeArticleHide, afterArticleShow }) {
   const divider = $("pane-divider"),
     workspace = document.querySelector(".workspace");
+  // Dragging this close to either edge (or Home/End, or an arrow at the limit) hides that side's pane.
+  const HIDE_WITHIN = 10;
   let panePercent = 50,
+    hiddenPane = null, // null, "notes" or "article"
     resizingPointer = null;
 
+  function describe() {
+    const value = hiddenPane === "notes" ? 100 : hiddenPane === "article" ? 0 : Math.round(panePercent);
+    divider.setAttribute("aria-valuenow", String(value));
+    divider.setAttribute(
+      "aria-valuetext",
+      hiddenPane ? `${hiddenPane === "notes" ? "Notes" : "Article"} hidden` : `Article ${value} percent, notes ${100 - value} percent`,
+    );
+    divider.title =
+      hiddenPane === "notes"
+        ? "Notes hidden: drag left or press ← to show them"
+        : hiddenPane === "article"
+          ? "Article hidden: drag right or press → to show it"
+          : "Drag to resize, or all the way to one side to hide a pane; arrow keys adjust; double-click to reset";
+  }
+
+  function setHiddenPane(pane, persist = true) {
+    if (pane === hiddenPane) return;
+    // Hiding the article resets its scroll, so the reading place is carried across.
+    if (pane === "article") beforeArticleHide?.();
+    const articleWasHidden = hiddenPane === "article";
+    hiddenPane = pane;
+    workspace.classList.toggle("notes-hidden", pane === "notes");
+    workspace.classList.toggle("article-hidden", pane === "article");
+    describe();
+    if (articleWasHidden) afterArticleShow?.();
+    if (persist) writeItem(storagePrefix() + "intel-pane-hidden", pane || "");
+  }
+
   function setPaneWidth(value, persist = true) {
+    setHiddenPane(null, persist);
     panePercent = Math.max(30, Math.min(70, value));
     workspace.style.setProperty("--article-width", `${panePercent}fr`);
     workspace.style.setProperty("--notes-width", `${100 - panePercent}fr`);
-    divider.setAttribute("aria-valuenow", String(Math.round(panePercent)));
-    divider.setAttribute(
-      "aria-valuetext",
-      `Article ${Math.round(panePercent)} percent, notes ${100 - Math.round(panePercent)} percent`,
-    );
+    describe();
     if (persist) writeItem(storagePrefix() + "intel-pane-width", String(panePercent));
   }
 
   const stored = Number(readItem(storagePrefix() + "intel-pane-width"));
   if (Number.isFinite(stored) && stored >= 30 && stored <= 70) setPaneWidth(stored, false);
+  const storedHidden = readItem(storagePrefix() + "intel-pane-hidden");
+  if (storedHidden === "notes" || storedHidden === "article") setHiddenPane(storedHidden, false);
+  describe();
 
   divider.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
@@ -34,7 +65,10 @@ export function initPaneDivider({ storagePrefix, readItem, writeItem }) {
   divider.addEventListener("pointermove", (event) => {
     if (event.pointerId !== resizingPointer) return;
     const bounds = workspace.getBoundingClientRect();
-    setPaneWidth(((event.clientX - bounds.left - 5) / (bounds.width - 10)) * 100);
+    const value = ((event.clientX - bounds.left - 5) / (bounds.width - 10)) * 100;
+    if (value >= 100 - HIDE_WITHIN) setHiddenPane("notes");
+    else if (value <= HIDE_WITHIN) setHiddenPane("article");
+    else setPaneWidth(value);
   });
   function stopResize() {
     resizingPointer = null;
@@ -48,10 +82,17 @@ export function initPaneDivider({ storagePrefix, readItem, writeItem }) {
     const changes = { ArrowLeft: -2, ArrowRight: 2 };
     if (event.key in changes) {
       event.preventDefault();
-      setPaneWidth(panePercent + changes[event.key]);
+      const left = event.key === "ArrowLeft";
+      if (hiddenPane === "notes") {
+        if (left) setPaneWidth(70);
+      } else if (hiddenPane === "article") {
+        if (!left) setPaneWidth(30);
+      } else if (!left && panePercent >= 70) setHiddenPane("notes");
+      else if (left && panePercent <= 30) setHiddenPane("article");
+      else setPaneWidth(panePercent + changes[event.key]);
     } else if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
-      setPaneWidth(event.key === "Home" ? 30 : 70);
+      setHiddenPane(event.key === "Home" ? "article" : "notes");
     } else if (event.key === "Enter") {
       event.preventDefault();
       setPaneWidth(50);

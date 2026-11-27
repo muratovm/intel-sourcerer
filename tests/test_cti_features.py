@@ -304,13 +304,38 @@ def test_ioc_curation_lifecycle_tracking_params_and_source_relevance(tmp_path):
         assert curated_u2["ips"] == [{"value": "45.77.12.34", "manual": True}]
         delete_manual_indicator(db, u2, "ips", "45.77.12.34")
 
-        # Excluded audit drawer reads latest import_runs report_json
+        # Excluded audit drawer reads across recent import_runs and respects dismissals
         db.execute(
             "INSERT INTO import_runs(started_at,since,until,report_json) VALUES ('2026-10-20','2026-10-01','2026-10-20',?)",
             (json.dumps({"sources": [{"id": "s1", "excluded": [{"title": "Dropped Deep Dive", "url": "https://vendor.example/dropped"}]}]}),),
         )
+        # Even after a subsequent single-source run with no excluded items, earlier excluded items stay reviewable.
+        db.execute(
+            "INSERT INTO import_runs(started_at,since,until,report_json) VALUES ('2026-10-21','2026-10-01','2026-10-21',?)",
+            (json.dumps({"sources": [{"id": "s2", "excluded": []}]}),),
+        )
         ex = recent_excluded(db)
         assert len(ex) == 1 and ex[0]["title"] == "Dropped Deep Dive"
+
+        from intel_sourcerer.source_view import dismiss_excluded
+        assert dismiss_excluded(db, ["https://vendor.example/dropped"]) == 1
+        assert recent_excluded(db) == []
+
+    # Custom keyword filter persistence and live matching
+    from intel_sourcerer.config import load_filters, reset_filters, save_filters
+    from intel_sourcerer.importer import exclusion_reason, relevance_reason
+    initial = load_filters(cfg)
+    assert initial["is_custom"] is False and "ransomware" in initial["include_keywords"]
+    updated = save_filters(cfg, ["agentic soc", "siem"], ["gartner"])
+    assert updated["is_custom"] is True and updated["include_keywords"] == ["agentic soc", "siem"]
+    assert load_sources(cfg)[0].id == "s1"  # sources.toml remains valid
+    soc_post = Article("Vendor", "Building the Agentic SOC with Next-Gen SIEM", "https://vendor.example/soc", "soc", datetime(2026, 10, 1, tzinfo=timezone.utc), None, None, "")
+    assert relevance_reason(soc_post, filters=updated) is not None
+    gartner_post = Article("Vendor", "Named a Leader in Gartner SIEM", "https://vendor.example/g", "g", datetime(2026, 10, 1, tzinfo=timezone.utc), None, None, "")
+    assert relevance_reason(gartner_post, filters=updated) is None
+    assert "gartner" in exclusion_reason(gartner_post, filters=updated).lower()
+    restored = reset_filters(cfg)
+    assert restored["is_custom"] is False
 
 
 def test_home_gym_endpoint_returns_themes_pulse_topics_and_takeaways(tmp_path):

@@ -230,7 +230,7 @@ function iocGroup(title, items, label, kind, handlers) {
         ignore.textContent = "×";
         ignore.title = item.manual ? "Remove manual indicator" : "Ignore false positive across library";
         ignore.setAttribute("aria-label", `${item.manual ? "Remove" : "Ignore false positive"}: ${item.value}`);
-        ignore.onclick = () => handlers.onIgnore(kind, item.value, !!item.manual);
+        ignore.onclick = () => handlers.onIgnore(kind, item.value, !!item.manual, row);
         links.append(ignore);
       }
       row.append(links);

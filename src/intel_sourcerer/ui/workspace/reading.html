@@ -74,7 +74,6 @@
           ><button id="text-larger" type="button" aria-label="Larger text">A+</button>
           <label class="sr-only" for="theme-select">Theme</label>
           <select id="theme-select" aria-label="Color theme">
-            <option value="auto">Auto</option>
             <option value="light">Light</option>
             <option value="dark">Dark</option>
           </select>
@@ -90,8 +89,8 @@
       aria-label="Resize article and notes panes"
       aria-orientation="vertical"
       aria-controls="article-pane"
-      aria-valuemin="30"
-      aria-valuemax="70"
+      aria-valuemin="0"
+      aria-valuemax="100"
       aria-valuenow="50"
       title="Drag to resize; arrow keys adjust; double-click to reset"
     ></div>
@@ -254,6 +253,9 @@
       <button data-action="next">Next</button>
       <button data-action="mark_next" class="primary" id="read-next">
         Mark read &amp; next
+      </button>
+      <button type="button" class="primary" id="standalone-mark-read" hidden>
+        Mark as read
       </button>
     </div>
     <div class="up-next">

@@ -48,7 +48,7 @@
           type="hidden"
           name="notes"
           value="${notes_filter}"
-        /><input type="hidden" name="progress" value="${progress_filter}" /><input type="hidden" name="unread" value="${unread_filter}" /><input type="hidden" name="tag" value="${tag}" /><input type="hidden" name="type" value="${kind}" /><input type="hidden" name="source" value="${source}" /><input type="hidden" name="topic" value="${topic}" /><input type="hidden" name="days" value="${days}" /><button class="sr-only" type="submit">Search</button>
+        /><input type="hidden" name="progress" value="${progress_filter}" /><input type="hidden" name="unread" value="${unread_filter}" /><input type="hidden" name="tag" value="${tag}" /><input type="hidden" name="type" value="${kind}" /><input type="hidden" name="source" value="${source}" /><input type="hidden" name="topic" value="${topic}" /><input type="hidden" name="days" value="${days}" /><input type="hidden" name="origin" value="${origin}" /><button class="sr-only" type="submit">Search</button>
       </form>
       <nav class="lib-tabs" aria-label="Library filters">
         <a class="${all_tab_class}" href="${all_link}"
@@ -62,7 +62,7 @@
         ><details class="lib-more-filters${filters_active_class}">
           <summary>${filters_label}</summary>
           <div class="lib-more-popover">
-            ${source_filter}${topic_filter}${days_filter}${tag_filter}${kind_filter}
+            ${source_filter}${origin_filter}${topic_filter}${days_filter}${tag_filter}${kind_filter}
           </div>
         </details>
       </nav>

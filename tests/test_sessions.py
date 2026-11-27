@@ -90,6 +90,24 @@ def test_queue_minutes_match_word_count_not_raw_chars(tmp_path):
     db.close()
 
 
+def test_set_article_read_standalone_and_records_first_read(tmp_path):
+    from intel_sourcerer.sessions import set_article_read
+
+    db = _reading_db(tmp_path)
+    res = set_article_read(db, 'https://example.com/a', True)
+    assert res['is_read'] is True
+    assert db.execute("SELECT is_read FROM articles WHERE url='https://example.com/a'").fetchone()[0] == 1
+    assert db.execute("SELECT COUNT(*) FROM article_reads WHERE article_url='https://example.com/a'").fetchone()[0] == 1
+    res2 = set_article_read(db, 'https://example.com/a', False)
+    assert res2['is_read'] is False
+    assert db.execute("SELECT is_read FROM articles WHERE url='https://example.com/a'").fetchone()[0] == 0
+    with pytest.raises(SessionError):
+        set_article_read(db, 'https://example.com/missing', True)
+    with pytest.raises(SessionError):
+        set_article_read(db, 'https://example.com/a', 'yes')
+    db.close()
+
+
 def test_rich_notes_sanitize_and_preserve_formatting():
     from intel_sourcerer.sessions import clean_notes
     result=clean_notes('<blockquote onclick="bad()"><b style="background-color: yellow">Finding</b><img src=x onerror="bad()"></blockquote>')

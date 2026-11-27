@@ -17,15 +17,11 @@ from .net_safety import public_only
 import trafilatura
 
 from .content import extract_article
-from .config import load_sources
+from .config import DEFAULT_EXCLUDE_KEYWORDS, DEFAULT_INCLUDE_KEYWORDS, load_filters, load_sources
 from .feeds import Article, FeedCache, Refused, fetch_feed, polite_get
 from .storage import connect_database, save_article, save_source
 
-TERMS = re.compile(
-    r"cyber|distillation|malicious|misuse|espionage|phishing|ransomware|vulnerabilit|prompt injection|hacking|frontier safeguards|"
-    r"cve-\d{4}-|exploit|malware|backdoor|intrusion|zero-day|adversar|supply chain|threat actor|botnet|rootkit|infostealer|post-exploitation",
-    re.I,
-)
+TERMS = re.compile("|".join(re.escape(term) for term in DEFAULT_INCLUDE_KEYWORDS), re.I)
 # Exclude broad launch/event/PR posts whose security mention is incidental.
 EXCLUDED_TITLES = re.compile(
     r"^(Introducing |GPT-\d.*: A new generation)|DevDay.*Recap|named a leader|gartner|forrester|appoints .* as|now available in aws",
@@ -33,6 +29,23 @@ EXCLUDED_TITLES = re.compile(
 )
 # Everything these teams publish is in scope, so no keyword has to match.
 ALWAYS_RELEVANT_SOURCES = {'anthropic-frontier-red-team'}
+
+
+def _compile_keywords(terms):
+    cleaned = [term.strip() for term in (terms or ()) if isinstance(term, str) and term.strip()]
+    if not cleaned:
+        return None
+    return re.compile("|".join(re.escape(term) for term in cleaned), re.I)
+
+
+def _article_summary_text(summary_html, max_chars=240):
+    if not summary_html:
+        return ""
+    text = " ".join(BeautifulSoup(summary_html, "html.parser").get_text(" ", strip=True).split())
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars].rsplit(" ", 1)[0].rstrip(" ,;:-–—")
+    return (cut or text[:max_chars]).rstrip() + "…"
 
 
 def try_again_label(seconds):
@@ -64,23 +77,48 @@ def in_window(article, since, until):
     return article.published_at is not None and since <= article.published_at <= until
 
 
-def selection_reason(article, source):
+def selection_reason(article, source, filters=None):
     if source.relevance == 'all':
         return f'All posts kept for {source.name}'
     if source.source_type == 'custom':
         return f'Custom feed: {source.name}'
     if source.id in ALWAYS_RELEVANT_SOURCES:
         return f'Published by {source.name}, a dedicated security research team'
-    return relevance_reason(article)
+    return relevance_reason(article, filters=filters)
 
 
-def relevance_reason(article):
+def _filter_patterns(filters):
+    if filters and filters.get("is_custom"):
+        inc_re = _compile_keywords(filters.get("include_keywords"))
+        exc_re = _compile_keywords(filters.get("exclude_keywords"))
+        return inc_re, exc_re
+    if filters and ("include_keywords" in filters or "exclude_keywords" in filters):
+        inc_re = _compile_keywords(filters.get("include_keywords", DEFAULT_INCLUDE_KEYWORDS))
+        exc_re = _compile_keywords(filters.get("exclude_keywords", DEFAULT_EXCLUDE_KEYWORDS))
+        return inc_re, exc_re
+    return TERMS, EXCLUDED_TITLES
+
+
+def relevance_reason(article, filters=None):
     # Exclude broad launch/event/PR posts whose security mention is incidental.
-    if EXCLUDED_TITLES.search(article.title):
+    inc_re, exc_re = _filter_patterns(filters)
+    if exc_re and exc_re.search(article.title):
+        return None
+    if not inc_re:
         return None
     text = article.title + ' ' + BeautifulSoup(article.summary_html, 'html.parser').get_text(' ', strip=True)
-    match = TERMS.search(text)
+    match = inc_re.search(text)
     return f"Cybersecurity rule match: {match.group(0)}; publisher title/summary" if match else None
+
+
+def exclusion_reason(article, filters=None):
+    """Human-readable explanation for why an article was filtered out during import."""
+    _, exc_re = _filter_patterns(filters)
+    if exc_re:
+        blocked = exc_re.search(article.title)
+        if blocked:
+            return f'Blocked by "{blocked.group(0).strip()}"'
+    return "No keyword match"
 
 
 def listing_date(element):
@@ -197,6 +235,10 @@ async def import_articles(config, database, since, until, *, source_id=None):
     if since >= until:
         raise ValueError('since must precede until')
     all_sources = load_sources(config)
+    try:
+        filters = load_filters(config)
+    except OSError:
+        filters = None
     if source_id is not None:
         sources = [s for s in all_sources if s.id == source_id]
         if not sources:
@@ -275,9 +317,15 @@ async def import_articles(config, database, since, until, *, source_id=None):
                     if not in_window(article, since, until):
                         continue
                     stats['in_window']+=1
-                    reason = selection_reason(article, source)
+                    reason = selection_reason(article, source, filters=filters)
                     if reason: selected.append((article,reason))
-                    else:stats['excluded'].append({'title': article.title, 'url': article.url})
+                    else:stats['excluded'].append({
+                        'title': article.title,
+                        'url': article.url,
+                        'reason': exclusion_reason(article, filters=filters),
+                        'summary': _article_summary_text(article.summary_html),
+                        'published_at': article.published_at.isoformat() if article.published_at else '',
+                    })
                 # Text already saved isn't fetched again. Failed ones stay out of this set, so they get another try.
                 saved={row[0] for row in db.execute("SELECT url FROM articles WHERE source_id=? AND content_status='full_text' AND content_html IS NOT NULL",(source.id,))}
                 gate=asyncio.Semaphore(4)

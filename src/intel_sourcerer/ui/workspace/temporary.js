@@ -210,13 +210,24 @@
   document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('article-type').value = 'All';
     document.getElementById('timeframe').value = '0';
-    document.getElementById('export-temporary').onclick = async () => {
+    // Sit the guest section beside the brand in each view's header, instead of a bar of its own.
+    const banner = document.querySelector('.temporary-banner');
+    const brands = document.querySelectorAll('.builder-header > .brand, .reader-session-header .brand');
+    if (banner && brands.length) {
+      brands.forEach(brand => brand.after(banner.cloneNode(true)));
+      banner.remove();
+    }
+    document.addEventListener('click', event => {
+      for (const info of document.querySelectorAll('.temporary-info[open]')) if (!info.contains(event.target)) info.open = false;
+    });
+    document.addEventListener('click', async event => {
+      if (!event.target.closest('.export-temporary')) return;
       await ready;
       await window.saveNow?.();
       const file = new Blob([JSON.stringify({articles: model.articles, timed_reading_sessions: model.timers || []}, null, 2)], {type:'application/json'});
       const url = URL.createObjectURL(file), link = document.createElement('a');
       link.href = url; link.download = 'intel-sourcerer-session.json'; link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    };
+    });
   });
 })();

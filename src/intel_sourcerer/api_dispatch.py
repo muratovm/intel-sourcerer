@@ -1,4 +1,5 @@
 """JSON API read and transactional mutation dispatch extracted from web.py."""
+from .article_links import article_href, resolve_article
 
 from dataclasses import asdict
 from html import escape, unescape
@@ -18,7 +19,13 @@ def _fast_note_preview(notes, notes_format):
     return " ".join(unescape(TAG_STRIP.sub(" ", notes)).split())
 
 from .config import load_sources
-from .content import arrange_media, format_label, render_article_soup, render_markdown_soup
+from .content import (
+    arrange_media,
+    drop_above_title,
+    format_label,
+    render_article_soup,
+    render_markdown_soup,
+)
 from .discovery import article_types
 from .iocs import extract_iocs
 from .jobs import get_job
@@ -40,6 +47,7 @@ from .sessions import (
     queue_state,
     rename_article,
     save_notes,
+    set_article_read,
     update_queue,
 )
 from .timed_reading import session_state, timer_action
@@ -61,12 +69,14 @@ def handle_api_get(db, database, config, path, query, *, is_admin, read_state_ar
                 payload["fts_urls"] = sorted(matched)
         return payload, 200
     if path == "/api/sources":
+        from .config import load_filters
         from .source_view import recent_excluded, source_health
 
         return {
             "sources": [asdict(source) for source in load_sources(config)],
             "health": source_health(db),
             "excluded": recent_excluded(db),
+            "filters": load_filters(config),
         }, 200
     if path == "/api/watchlists":
         from .watchlists import list_watchlists
@@ -185,10 +195,22 @@ def handle_api_get(db, database, config, path, query, *, is_admin, read_state_ar
         if not db.execute("SELECT 1 FROM articles WHERE url=?", (url,)).fetchone():
             return {"error": "Article not found"}, 404
         return related_reports(db, url), 200
+    if path == "/api/resolve-article":
+        # A /read/<id> link, or an old ?open=<url> link, mapped to the saved article it names.
+        identifier = params.get("id", [""])[0]
+        url = params.get("url", [""])[0]
+        if identifier:
+            found = resolve_article(db, identifier)
+        else:
+            row = db.execute("SELECT url, title FROM articles WHERE url=?", (url,)).fetchone()
+            found = (row["url"], row["title"]) if row else None
+        if not found:
+            return {"error": "That article isn't in your library."}, 404
+        return {"url": found[0], "href": article_href(*found)}, 200
     if path == "/api/article":
         url = params.get("url", [""])[0]
         row = db.execute(
-            "SELECT a.*,s.name AS publisher FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.url=?",
+            "SELECT a.*,s.name AS publisher,s.source_type FROM articles a JOIN sources s ON s.id=a.source_id WHERE a.url=?",
             (url,),
         ).fetchone()
         if not row:
@@ -203,11 +225,7 @@ def handle_api_get(db, database, config, path, query, *, is_admin, read_state_ar
                 "html.parser",
             )
         )
-        title = soup.find("h1")
-        if title:
-            for node in list(title.previous_siblings):
-                node.extract()
-            title.decompose()
+        drop_above_title(soup)
         arrange_media(soup, row["title"], row["url"])
         body_html = str(soup)
         from urllib.parse import urlencode
@@ -215,7 +233,7 @@ def handle_api_get(db, database, config, path, query, *, is_admin, read_state_ar
         cite_href = "/?" + urlencode({"open": row["url"]})
         source_href = f'href="{row["url"]}"'
         backlinks = [
-            {"kind": "article", "title": b["title"], "href": "/?" + urlencode({"open": b["url"]})}
+            {"kind": "article", "title": b["title"], "href": article_href(b["url"], b["title"])}
             for b in db.execute(
                 "SELECT url, title FROM articles WHERE url<>? AND (instr(notes, ?)>0 OR instr(notes, ?)>0) ORDER BY julianday(published_at) DESC LIMIT 20",
                 (row["url"], cite_href, source_href),
@@ -234,9 +252,11 @@ def handle_api_get(db, database, config, path, query, *, is_admin, read_state_ar
             content_format=row["content_format"],
             format_label=format_label(row["content_format"], row["publisher"]),
             url=row["url"],
+            read_href=article_href(row["url"], row["title"]),
             title=row["title"],
             published_at=row["published_at"],
             publisher=row["publisher"],
+            added_manually=row["source_type"] == "manual",
             is_read=row["is_read"],
             has_notes=has_notes(row["notes"], row["notes_format"]),
             notes=row["notes"],
@@ -358,6 +378,8 @@ def handle_api_mutation(db, path, data):
         return rename_article(db, data.get("url"), data.get("title")), 200
     if path == "/api/delete-article":
         return delete_article(db, data.get("url")), 200
+    if path == "/api/read-status":
+        return set_article_read(db, data.get("url"), data.get("is_read")), 200
     if path == "/api/navigate":
         return navigate(
             db,

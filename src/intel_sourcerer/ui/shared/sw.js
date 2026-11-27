@@ -15,6 +15,7 @@ const SHELL = [
   "/focus.js",
   "/math.js",
   "/app.js",
+  "/magic.js",
   "/library.js",
   "/indicators.js",
   "/brand-icon.png",

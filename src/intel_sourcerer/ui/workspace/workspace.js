@@ -74,11 +74,15 @@ function dateLabel(date) {
   }).format(new Date(date));
 }
 let replayingHistory = false;
-function syncHistory(search = "") {
+// A short /read/<id>/<slug> path for a saved article, or "/?<search>" for every other view.
+function syncHistory(search = "", path = "") {
   if (replayingHistory || isTemporarySession() || !window.history?.pushState) return;
-  const target = "/" + (search ? "?" + search : "");
+  const target = path || "/" + (search ? "?" + search : "");
   const current = location.pathname + location.search;
-  if (current !== target) history.pushState({ search }, "", target);
+  if (current === target) return;
+  // Same article under an old title slug: correct the address without adding a Back step.
+  const sameArticle = path && location.pathname.split("/").slice(0, 3).join("/") === path.split("/").slice(0, 3).join("/");
+  history[sameArticle ? "replaceState" : "pushState"]({ search }, "", target);
 }
 function show(view) {
   $("setup").inert = false;
@@ -142,6 +146,8 @@ function setBusy(value) {
     .querySelectorAll("[data-format]")
     .forEach((b) => (b.disabled = value));
   $("quote-selection").disabled = value || !selectedPassage;
+  const standaloneRead = $("standalone-mark-read");
+  if (standaloneRead) standaloneRead.disabled = value;
   document
     .querySelectorAll("[data-action]")
     .forEach(
@@ -269,7 +275,7 @@ async function updateServerQueue(urls) {
   }
 }
 
-async function toggleQueueArticle(article) {
+async function toggleQueueArticle(article, triggerEl = null) {
   if (!article?.url) return;
   const current = activeQueueItems().map((item) => item.url);
   if (current.includes(article.url)) {
@@ -279,6 +285,7 @@ async function toggleQueueArticle(article) {
       notice(`Queue is full (${MAX_QUEUE_ITEMS} articles max). Finish or remove one to add more.`);
       return;
     }
+    window.intelMagic?.fly(triggerEl, () => $("gym-continue"), { tone: "arcane" });
     await updateServerQueue([...current, article.url]);
   }
 }
@@ -488,7 +495,10 @@ function renderGym() {
             remove.type = "button";
             remove.textContent = "×";
             remove.setAttribute("aria-label", `Remove ${entry.title} from queue`);
-            remove.onclick = () => updateServerQueue(urls.filter((u) => u !== entry.url));
+            remove.onclick = async () => {
+              await window.intelMagic?.banish(li, { tone: "arcane" });
+              await updateServerQueue(urls.filter((u) => u !== entry.url));
+            };
             controls.append(remove);
 
             li.append(num, copy, controls);
@@ -577,7 +587,7 @@ function renderGym() {
         setBtn.classList.toggle("is-added", inQueue);
         setBtn.disabled = !inQueue && queueFull;
         setBtn.title = !inQueue && queueFull ? `Queue is full (${MAX_QUEUE_ITEMS} articles max)` : "";
-        setBtn.onclick = () => toggleQueueArticle(article);
+        setBtn.onclick = () => toggleQueueArticle(article, setBtn);
         const dismissBtn = document.createElement("button");
         dismissBtn.type = "button";
         dismissBtn.className = "gym-dismiss-btn";
@@ -585,7 +595,10 @@ function renderGym() {
         dismissBtn.title = "Dismiss from suggestions";
         dismissBtn.setAttribute("aria-label", `Dismiss ${article.title}`);
         dismissBtn.onclick = async () => {
-          await decideTriage([article.url], "skip");
+          await Promise.all([
+            window.intelMagic?.banish(row, { tone: "arcane" }),
+            decideTriage([article.url], "skip"),
+          ]);
           renderGym();
         };
         actions.append(readBtn, setBtn, dismissBtn);
@@ -660,7 +673,13 @@ $("gym-clear-filter")?.addEventListener("click", () => {
   gymFilter = null;
   renderGym();
 });
-$("gym-clear-queue")?.addEventListener("click", () => updateServerQueue([]));
+$("gym-clear-queue")?.addEventListener("click", async () => {
+  const list = $("gym-queue-list");
+  const target = list && !list.hidden ? list : $("gym-continue");
+  await window.intelMagic?.banish(target, { tone: "clear" });
+  target?.removeAttribute("data-banishing");
+  await updateServerQueue([]);
+});
 $("gym-queue-toggle")?.addEventListener("click", () => {
   homeQueueExpanded = !homeQueueExpanded;
   renderGym();
@@ -672,6 +691,7 @@ $("gym-refresh")?.addEventListener("click", async () => {
   status.hidden = false;
   status.textContent = "Checking your sources for new research…";
   notice("");
+  const cast = window.intelMagic?.casting(button);
   try {
     const report = await runBackgroundJob("/api/jobs/discover", { days: 30 }),
       added = report.sources.reduce((total, source) => total + source.inserted, 0);
@@ -680,8 +700,10 @@ $("gym-refresh")?.addEventListener("click", async () => {
     status.textContent = added
       ? `${added} new ${added === 1 ? "report" : "reports"} added.`
       : "Up to date — no new reports right now.";
+    cast?.finish(added > 0);
     if (report.errors.length || report.paused.length) notice([...report.errors, ...report.paused].join(" · "));
   } catch (error) {
+    cast?.cancel();
     status.textContent = "Couldn't refresh sources right now.";
     notice(error.message);
   } finally {
@@ -725,11 +747,15 @@ function renderWatchlist() {
       remove.setAttribute("aria-label", `Stop watching ${item.term}`);
       remove.onclick = async () => {
         try {
-          await api("/api/watchlist-delete", { id: item.id });
+          await Promise.all([
+            window.intelMagic?.banish(chip, { tone: "arcane", count: 14 }),
+            api("/api/watchlist-delete", { id: item.id }),
+          ]);
           state = await api("/api/state");
           renderWatchlist();
           renderGym();
         } catch (error) {
+          chip.removeAttribute("data-banishing");
           notice(error.message);
         }
       };
@@ -915,7 +941,9 @@ function renderBuilder() {
   if (!articles.length) {
     const empty = document.createElement("p");
     empty.className = "muted";
-    empty.textContent = "No saved matches. Find latest articles or add a link.";
+    empty.textContent = isTemporarySession()
+      ? "No articles yet. Paste an article link or drop a file in Your queue to start."
+      : "No saved matches. Find latest articles or add a link.";
     $("discovery-results").append(empty);
   }
   $("queue-count").textContent = `· ${draftQueue.length} articles`;
@@ -1167,7 +1195,7 @@ function readingTimeLabel(article) {
 }
 
 function readerMetadata(article) {
-  return `${article.publisher} · ${dateLabel(article.published_at)} · ${readingTimeLabel(article)} · ${article.is_read ? "Read" : "Unread"}${article.has_notes ? " · Noted" : ""}`;
+  return `${article.publisher}${article.added_manually ? " · Added by you" : ""} · ${dateLabel(article.published_at)} · ${readingTimeLabel(article)} · ${article.is_read ? "Read" : "Unread"}${article.has_notes ? " · Noted" : ""}`;
 }
 
 function renderMedia() {
@@ -1196,15 +1224,19 @@ function renderIOCs() {
     bodyEl: $("article-body"),
     setPhoneView,
     notice,
-    async onIgnore(kind, value, manual) {
+    async onIgnore(kind, value, manual, row) {
       if (!currentArticle) return;
       try {
-        await api(
-          manual ? "/api/indicator-remove" : "/api/indicator-ignore",
-          manual ? { url: currentArticle.url, kind, value } : { kind, value },
-        );
+        await Promise.all([
+          window.intelMagic?.banish(row, { tone: "smoke" }),
+          api(
+            manual ? "/api/indicator-remove" : "/api/indicator-ignore",
+            manual ? { url: currentArticle.url, kind, value } : { kind, value },
+          ),
+        ]);
         await refreshArticleIOCs();
       } catch (error) {
+        row?.removeAttribute("data-banishing");
         notice(error.message);
       }
     },
@@ -1345,6 +1377,7 @@ async function renderQueue() {
     standaloneURL
       ? new URLSearchParams({ open: standaloneURL }).toString()
       : "view=reader",
+    standaloneURL && article.read_href ? article.read_href : "",
   );
   document.dispatchEvent(
     new CustomEvent("reader-article", { detail: article }),
@@ -1352,10 +1385,10 @@ async function renderQueue() {
   setBusy(false);
   document
     .querySelectorAll(
-      "[data-action=previous],[data-action=next],[data-action=mark_next],[data-action=unread],.nav-bar .up-next,.nav-bar .progress-area",
+      "[data-action=previous],[data-action=next],[data-action=mark_next],.nav-bar .up-next,.nav-bar .progress-area",
     )
     .forEach((el) => (el.hidden = !!standaloneURL));
-  $("mark-unread").hidden = !!standaloneURL || !article.is_read;
+  syncStandaloneReadUI();
   restoreFraction(savedFraction(article));
   sentFraction = articleFraction();
   if (text !== article.notes && noteModel.revision === article.notes_revision)
@@ -1426,10 +1459,59 @@ window.addEventListener("beforeunload", (event) => {
     event.returnValue = "";
   }
 });
+function syncStandaloneReadUI() {
+  const article = currentArticle;
+  const markBtn = $("standalone-mark-read");
+  const unreadBtn = $("mark-unread");
+  if (unreadBtn) unreadBtn.hidden = !article || !article.is_read;
+  if (!markBtn) return;
+  markBtn.hidden = !standaloneURL || !article || isTemporarySession();
+  if (!markBtn.hidden) {
+    const isRead = Boolean(article.is_read);
+    markBtn.textContent = isRead ? "Marked as read ✓" : "Mark as read";
+    markBtn.classList.toggle("primary", !isRead);
+    markBtn.setAttribute("aria-pressed", String(isRead));
+  }
+}
+
+async function setStandaloneRead(isRead, triggerEl = null) {
+  if (!currentArticle || busy) return;
+  setBusy(true);
+  notice("");
+  try {
+    await saveNow();
+    if (isRead) await window.pauseFocusTimer?.();
+    const res = await api("/api/read-status", { url: currentArticle.url, is_read: isRead });
+    currentArticle.is_read = Boolean(res.is_read);
+    if (res.queue !== undefined && state) state.queue = res.queue;
+    for (const item of state?.articles || []) {
+      if (item.url === currentArticle.url) item.is_read = currentArticle.is_read ? 1 : 0;
+    }
+    $("article-meta").textContent = readerMetadata(currentArticle);
+    syncStandaloneReadUI();
+    if (currentArticle.is_read) {
+      window.intelMagic?.celebrate(triggerEl || $("standalone-mark-read"), { tone: "emerald" });
+    }
+  } catch (error) {
+    notice(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+$("standalone-mark-read")?.addEventListener("click", (event) => {
+  if (!currentArticle) return;
+  setStandaloneRead(!currentArticle.is_read, event.currentTarget);
+});
+
 document.querySelectorAll("[data-action]").forEach(
   (button) =>
     (button.onclick = async () => {
       if (busy) return;
+      if (standaloneURL && button.dataset.action === "unread") {
+        await setStandaloneRead(false, button);
+        return;
+      }
       setBusy(true);
       notice("");
       stashScroll();
@@ -1458,12 +1540,20 @@ document.querySelectorAll("[data-action]").forEach(
           setBusy(false);
           return;
         }
+        const wasMarkRead = button.dataset.action === "mark_next";
+        if (wasMarkRead) window.intelMagic?.celebrate(button, { tone: "emerald" });
         state.queue = await api("/api/navigate", {
           queue_id: state.queue.id,
           cursor: state.queue.cursor,
           action: button.dataset.action,
         });
         await renderQueue();
+        if (state.queue?.finished) {
+          window.intelMagic?.celebrate(document.querySelector("#complete .completion-dialog"), {
+            tone: "gold",
+            intensity: 1.75,
+          });
+        }
       } catch (error) {
         notice(error.message);
         setBusy(false);
@@ -1579,7 +1669,11 @@ $("highlight-selection").onclick = async () => {
   try {
     const highlight = await api("/api/highlights", { url: article.url, ...anchor });
     (article.highlights ||= []).push(highlight);
-    if (currentArticle === article) renderHighlights();
+    if (currentArticle === article) {
+      renderHighlights();
+      const markEl = document.querySelector(`mark.article-highlight[data-highlight-id="${CSS.escape(highlight.id)}"]`);
+      window.intelMagic?.shimmer(markEl, { tone: "gold" });
+    }
   } catch (error) {
     notice(error.message);
   }
@@ -1632,7 +1726,9 @@ $("remove-highlight").onclick = async () => {
   const article = currentArticle,
     id = activeHighlight;
   if (!article || !id) return;
+  const markEl = document.querySelector(`mark.article-highlight[data-highlight-id="${CSS.escape(id)}"]`);
   try {
+    window.intelMagic?.puff(markEl, { tone: "gold", count: 14 });
     await api("/api/highlight-delete", { id });
     article.highlights = article.highlights.filter((item) => item.id !== id);
     activeHighlight = null;
@@ -1697,8 +1793,8 @@ const { applyTextScale } = initTextScale({
     renderHighlights();
   },
 });
-$("theme-select").value = window.intelTheme?.get() || "auto";
-$("theme-select").onchange = () => window.intelTheme?.set($("theme-select").value);
+$("theme-select").value = window.intelTheme?.get() || "light";
+$("theme-select").onchange = () => window.intelTheme?.set($("theme-select").value, $("theme-select"));
 
 document.addEventListener("keydown", (event) => {
   if ($("complete").hidden) return;
@@ -1912,7 +2008,13 @@ async function checkTranscript() {
   }
 }
 
-initPaneDivider({ storagePrefix, readItem, writeItem });
+initPaneDivider({
+  storagePrefix,
+  readItem,
+  writeItem,
+  beforeArticleHide: stashScroll,
+  afterArticleShow: () => currentArticle && restoreFraction(savedFraction(currentArticle)),
+});
 
 // Finder drops provide file bytes, rather than a usable local filesystem path.
 async function importFiles(files) {
@@ -2030,6 +2132,8 @@ function populateArticleCitations(article) {
         link.textContent = `${item.publisher}, ${dateLabel(item.published_at)}`;
         focusNotes();
         document.execCommand("insertHTML", false, link.outerHTML + "&nbsp;");
+        const inserted = [...$("notes").querySelectorAll("a")].reverse().find((a) => a.getAttribute("href") === href);
+        window.intelMagic?.shimmer(inserted, { tone: "arcane" });
         menu.open = false;
         noteChanged();
       };
@@ -2200,6 +2304,28 @@ window.notice = notice;
 window.saveNow = saveNow;
 window.focusMinutes = focusMinutes;
 window.readerMetadata = readerMetadata;
+window.syncStandaloneReadUI = syncStandaloneReadUI;
+
+// The article a link names: /read/<id> for saved ones, ?open=<url> for anything else.
+// An old ?open= link to a saved article is swapped for its short path without a reload.
+async function articleFromLocation() {
+  const id = location.pathname.match(/^\/read\/([0-9a-f]{8})(?:\/|$)/)?.[1];
+  if (id) {
+    try {
+      return (await api("/api/resolve-article?" + new URLSearchParams({ id }))).url;
+    } catch (error) {
+      history.replaceState(null, "", "/");
+      notice(error.message);
+      return null;
+    }
+  }
+  const open = new URLSearchParams(location.search).get("open");
+  if (open && !isTemporarySession()) {
+    const found = await api("/api/resolve-article?" + new URLSearchParams({ url: open })).catch(() => null);
+    if (found?.href) history.replaceState(history.state, "", found.href);
+  }
+  return open;
+}
 
 window.addEventListener("popstate", async () => {
   if (isTemporarySession() || !state) return;
@@ -2207,7 +2333,7 @@ window.addEventListener("popstate", async () => {
   try {
     await saveNow().catch(() => {});
     const params = new URLSearchParams(location.search);
-    const open = params.get("open");
+    const open = await articleFromLocation();
     const view = params.get("view");
     if (open) {
       standaloneURL = open;
@@ -2239,7 +2365,7 @@ window.addEventListener("popstate", async () => {
     }
     const initialParams = new URLSearchParams(location.search);
     const view = initialParams.get("view");
-    const open = initialParams.get("open");
+    const open = await articleFromLocation();
     if (view === "builder" && !isTemporarySession()) {
       location.replace("/library?panel=queue");
       return;

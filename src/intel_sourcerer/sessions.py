@@ -156,6 +156,16 @@ def save_notes(db,url,text,revision,format='plain'):
     return revision+1
 
 
+def set_article_read(db, url, is_read):
+    """Mark a single article read or unread directly (e.g. when opened standalone in the reader)."""
+    if not isinstance(url, str) or type(is_read) is not bool:
+        raise SessionError('Invalid read status.')
+    result = db.execute('UPDATE articles SET is_read=? WHERE url=?', (int(is_read), url))
+    if result.rowcount != 1:
+        raise SessionError('Article not found. Refresh and try again.')
+    return {'url': url, 'is_read': is_read, 'queue': queue_state(db)}
+
+
 def navigate(db,queue_id,cursor,action):
     state=queue_state(db)
     if type(cursor) is not int or not state or state['id']!=queue_id or state['cursor']!=cursor or state['finished']:

@@ -117,9 +117,13 @@ function renderDetail(item) {
   ignore.addEventListener("click", async () => {
     ignore.disabled = true;
     try {
-      await postIndicator("/api/indicator-ignore", { kind: item.kind, value: item.value });
+      await Promise.all([
+        window.intelMagic?.banish(selected, { tone: "smoke" }),
+        postIndicator("/api/indicator-ignore", { kind: item.kind, value: item.value }),
+      ]);
       location.reload();
     } catch (error) {
+      selected?.removeAttribute("data-banishing");
       ignore.disabled = false;
       alert(error.message);
     }

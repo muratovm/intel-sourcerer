@@ -27,16 +27,16 @@ async function importPlaylistJob(url) {
     if (job.state === "failed") throw new Error(job.error || "Playlist import failed.");
   }
 }
-const deleteButton = document.querySelector(".lib-delete"),
-  dialog = document.getElementById("delete-dialog"),
+const currentDeleteURL = () => document.querySelector("#lib-panel-details .lib-delete")?.dataset.url || "";
+const dialog = document.getElementById("delete-dialog"),
   confirmDelete = document.getElementById("confirm-delete"),
   cancelDelete = document.getElementById("cancel-delete"),
   deleteError = document.getElementById("delete-error");
-if (deleteButton)
-  deleteButton.addEventListener("click", () => {
-    deleteError.hidden = true;
-    dialog.showModal();
-  });
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("#lib-panel-details .lib-delete")) return;
+  deleteError.hidden = true;
+  dialog.showModal();
+});
 cancelDelete.addEventListener("click", () => dialog.close());
 dialog.addEventListener("cancel", (event) => {
   if (confirmDelete.disabled) event.preventDefault();
@@ -46,12 +46,13 @@ confirmDelete.addEventListener("click", async () => {
   cancelDelete.disabled = true;
   deleteError.hidden = true;
   try {
-    await libraryAPI("/api/delete-article", { url: deleteButton.dataset.url });
+    const deletedURL = currentDeleteURL();
+    await libraryAPI("/api/delete-article", { url: deletedURL });
     try {
-      localStorage.removeItem(userStoragePrefix + "intel-draft:" + deleteButton.dataset.url);
+      localStorage.removeItem(userStoragePrefix + "intel-draft:" + deletedURL);
       const raw = JSON.parse(localStorage.getItem(userStoragePrefix + "intel-queue-draft") || "[]");
       if (Array.isArray(raw)) {
-        const next = raw.filter((u) => u !== deleteButton.dataset.url);
+        const next = raw.filter((u) => u !== deletedURL);
         localStorage.setItem(userStoragePrefix + "intel-queue-draft", JSON.stringify(next));
       }
     } catch { }
@@ -84,6 +85,7 @@ async function addLinks(text) {
   }
   importing = true;
   addButton.disabled = true;
+  const cast = window.intelMagic?.casting(addButton);
   let added = 0,
     lastURL = null,
     lastTopic = null,
@@ -105,6 +107,8 @@ async function addLinks(text) {
   }
   importing = false;
   addButton.disabled = false;
+  if (added > 0) cast?.finish(true);
+  else cast?.cancel();
   if (errors.length) {
     feedback.textContent = `${added} articles added. ${errors.join(" ")}`;
     if (added) {
@@ -150,6 +154,7 @@ drop.addEventListener("drop", (event) => {
 // Finder drops provide file bytes, rather than a usable local filesystem path.
 async function addFiles(files) {
   addButton.disabled = true;
+  const cast = window.intelMagic?.casting(addButton);
   const feedback = document.getElementById("library-feedback");
   feedback.hidden = false;
   let lastURL = null;
@@ -167,21 +172,24 @@ async function addFiles(files) {
       if (!response.ok) throw new Error(result.error || "File import failed.");
       lastURL = result.url;
     }
+    cast?.finish(true);
     feedback.textContent = "Files added.";
     if (lastURL) location.assign("/library?selected=" + encodeURIComponent(lastURL));
   } catch (error) {
+    cast?.cancel();
     feedback.textContent = error.message;
   } finally {
     addButton.disabled = false;
   }
 }
 
-const renameButton = document.querySelector('.lib-rename');
+const currentRenameURL = () => document.querySelector('#lib-panel-details .lib-rename')?.dataset.url || '';
 const renameDialog = document.getElementById('rename-dialog');
 const renameInput = document.getElementById('article-new-title');
 const renameError = document.getElementById('rename-error');
 const renameSave = document.getElementById('save-rename');
-renameButton?.addEventListener('click', () => {
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('#lib-panel-details .lib-rename')) return;
   renameInput.value = document.querySelector('#lib-panel-details > h2').textContent;
   renameError.hidden = true;
   renameDialog.showModal();
@@ -193,7 +201,7 @@ document.getElementById('rename-form').addEventListener('submit', async (event) 
   event.preventDefault();
   renameSave.disabled = true;
   try {
-    await libraryAPI('/api/rename-article', { url: renameButton.dataset.url, title: renameInput.value });
+    await libraryAPI('/api/rename-article', { url: currentRenameURL(), title: renameInput.value });
     location.reload();
   } catch (error) {
     renameError.textContent = error.message;
@@ -203,8 +211,9 @@ document.getElementById('rename-form').addEventListener('submit', async (event) 
   }
 });
 
-const topicBox = document.getElementById("lib-topic-editor");
-if (topicBox) {
+function mountDetailTopics() {
+  const topicBox = document.getElementById("lib-topic-editor");
+  if (!topicBox) return;
   const editor = mountTopicEditor(topicBox, {
     post: libraryAPI,
     onError(message) {
@@ -231,6 +240,7 @@ if (topicBox) {
       topicBox.hidden = true;
     });
 }
+mountDetailTopics();
 // Filter menus close on an outside click, and opening one closes siblings.
 const outerFilterMenu = document.querySelector(".lib-more-filters");
 const filterMenus = document.querySelectorAll(".lib-tag-menu, .lib-filter-menu");
@@ -423,7 +433,10 @@ function renderLibraryQueue() {
       remove.type = "button";
       remove.textContent = "×";
       remove.setAttribute("aria-label", `Remove ${item.title} from queue`);
-      remove.onclick = () => saveServerQueue(queueURLs().filter((u) => u !== url));
+      remove.onclick = async () => {
+        await window.intelMagic?.banish(li, { tone: "arcane" });
+        await saveServerQueue(queueURLs().filter((u) => u !== url));
+      };
       controls.append(remove);
 
       li.append(handle, copy, controls);
@@ -433,7 +446,7 @@ function renderLibraryQueue() {
   syncQueueButtons();
 }
 
-async function toggleQueueURL(url) {
+async function toggleQueueURL(url, triggerEl = null) {
   if (!url) return;
   const urls = queueURLs();
   if (urls.includes(url)) {
@@ -444,6 +457,11 @@ async function toggleQueueURL(url) {
       feedback.textContent = `Queue is full (${MAX_QUEUE_ITEMS} articles max). Finish or remove one to add more.`;
       return;
     }
+    const queueTarget = () => {
+      const panel = document.getElementById("lib-panel-queue");
+      return (panel && !panel.hidden ? document.getElementById("lib-queue-count") || panel : null) || document.querySelector(".lib-list-head");
+    };
+    window.intelMagic?.fly(triggerEl, queueTarget, { tone: "arcane" });
     await saveServerQueue([...urls, url]);
   }
 }
@@ -453,23 +471,37 @@ function startReadingQueue() {
   location.assign("/?view=reader");
 }
 
-document.querySelectorAll("[data-queue-url]").forEach((btn) => {
-  btn.addEventListener("click", () => toggleQueueURL(btn.dataset.queueUrl));
+document.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-queue-url]");
+  if (btn) toggleQueueURL(btn.dataset.queueUrl, btn);
 });
-document.getElementById("lib-queue-visible")?.addEventListener("click", () => {
+document.getElementById("lib-queue-visible")?.addEventListener("click", (event) => {
+  const trigger = event.currentTarget;
   const urls = queueURLs();
   const existing = new Set(urls);
+  let added = 0;
   for (const row of document.querySelectorAll(".lib-item-row[data-url]")) {
     const url = row.dataset.url;
     if (!existing.has(url) && urls.length < MAX_QUEUE_ITEMS) {
       urls.push(url);
       existing.add(url);
+      added++;
     }
+  }
+  if (added > 0) {
+    const queueTarget = () => document.getElementById("lib-queue-count") || document.getElementById("lib-panel-queue");
+    window.intelMagic?.fly(trigger, queueTarget, { tone: "arcane", delayMs: 0 });
+    if (added > 1) window.intelMagic?.fly(trigger, queueTarget, { tone: "arcane", delayMs: 90 });
   }
   saveServerQueue(urls);
 });
 document.getElementById("lib-start-queue")?.addEventListener("click", startReadingQueue);
-document.getElementById("lib-clear-queue-top")?.addEventListener("click", () => saveServerQueue([]));
+document.getElementById("lib-clear-queue-top")?.addEventListener("click", async () => {
+  const listEl = document.getElementById("lib-queue-list");
+  await window.intelMagic?.banish(listEl, { tone: "clear" });
+  listEl?.removeAttribute("data-banishing");
+  await saveServerQueue([]);
+});
 
 const libSaveTopicOpen = document.getElementById("lib-save-topic-open");
 const libSaveTopicForm = document.getElementById("lib-save-topic-form");
@@ -523,3 +555,66 @@ libraryAPI("/api/queue")
     renderLibraryQueue();
   })
   .catch(() => {});
+
+// Choosing an article fills the right-hand panel in place instead of reloading the page.
+// The server still renders the panel, so it matches a full page load exactly.
+const detailPanel = document.getElementById("lib-panel-details");
+// Hide any remote article banner image that fails to load so no broken-image icon appears.
+detailPanel?.addEventListener(
+  "error",
+  (event) => {
+    if (event.target instanceof HTMLImageElement && event.target.classList.contains("lib-preview-banner")) {
+      event.target.hidden = true;
+    }
+  },
+  true,
+);
+detailPanel?.querySelectorAll("img.lib-preview-banner").forEach((img) => {
+  if (img.complete && img.naturalWidth === 0) img.hidden = true;
+});
+let detailRequest = 0;
+async function showArticleDetail(href, { push = true } = {}) {
+  const request = ++detailRequest;
+  const target = new URL(href, location.href);
+  detailPanel?.setAttribute("aria-busy", "true");
+  try {
+    const response = await fetch(target.pathname + target.search, { headers: { Accept: "text/html" } });
+    if (!response.ok || response.redirected) throw new Error("Couldn't load that article.");
+    const page = new DOMParser().parseFromString(await response.text(), "text/html");
+    const fresh = page.getElementById("lib-panel-details");
+    if (!fresh) throw new Error("Couldn't load that article.");
+    if (request !== detailRequest) return;
+    detailPanel.replaceChildren(...fresh.childNodes);
+    const selected = target.searchParams.get("selected") || "";
+    document.querySelectorAll(".lib-item-row[data-url]").forEach((row) => {
+      const on = row.dataset.url === selected;
+      row.classList.toggle("selected", on);
+      const link = row.querySelector(".lib-item");
+      link?.classList.toggle("selected", on);
+      if (on) link?.setAttribute("aria-current", "true");
+      else link?.removeAttribute("aria-current");
+    });
+    if (push) history.pushState({ libraryDetail: true }, "", target.pathname + target.search);
+    mountDetailTopics();
+    // The queue panel highlights the article that's open, so redraw it too.
+    renderLibraryQueue();
+    if (matchMedia("(max-width: 899px)").matches)
+      document.getElementById("lib-details")?.scrollIntoView({ block: "start", behavior: "smooth" });
+    else detailPanel.scrollTop = 0;
+  } catch {
+    // Fall back to the old behaviour rather than leave the panel stale.
+    location.assign(target.href);
+  } finally {
+    if (request === detailRequest) detailPanel?.removeAttribute("aria-busy");
+  }
+}
+document.addEventListener("click", (event) => {
+  const link = event.target.closest("a.lib-item");
+  if (!link || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+  event.preventDefault();
+  showArticleDetail(link.href);
+});
+window.addEventListener("popstate", () => {
+  if (new URLSearchParams(location.search).has("selected")) showArticleDetail(location.href, { push: false });
+  else location.reload();
+});

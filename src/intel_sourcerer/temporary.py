@@ -1,5 +1,6 @@
 """Serve a frontend-only reading session from supplied articles."""
 
+import re
 import argparse
 import json
 import uuid
@@ -171,21 +172,29 @@ def temporary_page(session_id, guest=False):
         .replace("__USER_ID__", "temporary-" + session_id)
         .replace("__TOKEN__", "temporary")
     )
-    page = page.replace(
-        '<script type="module" src="/reader.js"></script>',
-        '<script src="/temporary.js" defer></script>\n    <script type="module" src="/reader.js"></script>',
+    # The reader tag carries a ?v= version, so match it by pattern rather than exact text.
+    page = re.sub(
+        r'<script type="module" src="/reader\.js(?:\?v=[0-9a-f]+)?"></script>',
+        lambda match: '<script src="/temporary.js" defer></script>\n    ' + match.group(0),
+        page,
+        count=1,
     )
+    # A small section that temporary.js places beside the brand in each header; the explanation opens from its label.
+    links = '<a href="/guest">New queue</a><a href="/login">Sign in</a>' if guest else ""
     page = page.replace(
         "<body>",
-        '<body class="temporary-session"><div class="temporary-banner">Temporary reading session · no account or saved library <button id="export-temporary">Export articles &amp; notes</button><span>Notes stay in this tab. Export before closing it.</span></div>',
+        '<body class="temporary-session"><div class="temporary-banner">'
+        '<details class="temporary-info"><summary>'
+        + ("Guest" if guest else "Temporary")
+        + '</summary><p>No account or saved library. Your articles and notes stay in this'
+        " browser tab only, so export them before you close it.</p></details>"
+        '<button class="export-temporary" type="button" title="Export articles &amp; notes">Export</button>'
+        + links
+        + "</div>",
     )
 
     if guest:
         page = page.replace("/reader.js", "/guest-reader.js")
-        page = page.replace(
-            "<span>Notes stay",
-            '<a href="/login">Sign in</a><a href="/guest">New guest queue</a><span>Notes stay',
-        )
     return page
 
 

@@ -14,14 +14,14 @@ TAIL_LABELS = {
     'related content', 'related blogs', 'related resources', 'you may also like',
     'you might also like', 'recommended', 'recommended for you', 'recommended reading',
     'read next', 'keep reading', 'more from this author', 'more articles', 'more posts',
-    'more stories', 'latest posts', 'latest articles', 'explore', 'featured research',
+    'more stories', 'latest posts', 'latest articles', 'explore', 'featured research', 'also see',
 }
 TAIL_PATTERN = re.compile(r'^((explore|discover|read|see) more\b.{0,30}(blogs?|posts?|articles?|stories|resources)|(get|sign up|subscribe)\b.{0,50}(inbox|newsletter|updates))$')
 # These sit anywhere: the label plus the list or short lines straight after it.
 SECTION_LABELS = {
     'tags', 'tagged', 'tagged with', 'topics', 'related topics', 'popular topics',
     'categories', 'category', 'posted in', 'filed under', 'share', 'share this',
-    'share this post', 'share this article', 'share on', 'follow', 'follow us',
+    'share this post', 'share this article', 'share this publication', 'share on', 'follow', 'follow us',
     'content types', 'products and services', 'threats intelligence', 'related products',
     'table of contents', 'contents', 'on this page', 'in this article', 'in this post',
 }
@@ -36,13 +36,14 @@ INLINE_TAG_LINE = re.compile(r'^(tags?|tagged( with)?|topics?|categor(y|ies)|pos
 CALL_TO_ACTION = re.compile(r'^(contact (us|mandiant|sales)\b.*|.*get a demo|request a demo|sign up.*|subscribe.*|view open roles)$', re.I)
 SITE_LINK = re.compile(r'^(←\s*)?(back to .{1,40}|view more|see more|see all.{0,30}|view all.{0,30})$', re.I)
 KEEP_LINK = re.compile(r'^(read|download|watch|see|view|get)\b', re.I)
+BACK_TO_TOP = re.compile(r'^[↑^\s]*(go up|back to top|scroll to top|to top)[↑^\s]*$', re.I)
 AUTHOR_CARD_LINK = re.compile(r'^see (all )?posts by this author$', re.I)
 CARD_META = re.compile(r'\b\d+[- ]min(ute)?s?[- ]read\b', re.I)
 NEXT_ARTICLE = re.compile(r'\bNext:\s', re.I)
 FEEDBACK = re.compile(r'^(was|is|did|how)\b.{0,30}\b(useful|helpful)$')
 CRUMB_SEPARATOR = ('>', '/', '›', '»')
 # Class and id names sites use for what surrounds an article, whole words only so "shared" isn't "share".
-FURNITURE_NAME = re.compile(r'(^|[-_])(breadcrumbs?|sidebar|suggested[-_]content|related[-_](posts?|articles?|content|blogs?|stories)|more[-_]blogs|newsletter|cta[-_]module|social[-_]share|share[-_]buttons|feedback)($|[-_])', re.I)
+FURNITURE_NAME = re.compile(r'(^|[-_])(breadcrumbs?|sidebar|suggested[-_]content|(related|recent)[-_](posts?|articles?|content|blogs?|stories)|more[-_]blogs|newsletter|cta[-_]module|social[-_]share|share[-_]buttons|feedback|back[-_]to[-_]top|aside[-_]box|cookies?[-_](notice|banner|consent)|popup)($|[-_])', re.I)
 # A named block this big, or holding real writing, is the article itself or a callout in it.
 MAX_FURNITURE_SHARE = 0.3
 LANGUAGES = {'english', 'español', 'espanol', 'français', 'deutsch', 'português', 'italiano', '中文', '日本語', '한국어', 'русский', 'العربية'}
@@ -271,6 +272,20 @@ def _mark_cards(blocks, doomed):
                 doomed.add(index + 1)
 
 
+def _mark_after_back_to_top(blocks, doomed):
+    """A "Go up" link closes the article; what follows is the site, unless it holds prose.
+
+    Long pages may repeat the link after every section, so only the last one counts.
+    """
+    last = next((i for i in range(len(blocks) - 1, -1, -1) if _link_only(blocks[i]) and BACK_TO_TOP.match(_text(blocks[i]))), None)
+    if last is None or any(len(_text(node)) >= LONG_PARAGRAPH for node in blocks[last + 1:]):
+        return
+    doomed.update(range(last, len(blocks)))
+    # The arrow icon that sits on the link.
+    if last and _placeholder(blocks[last - 1]) and 'No description supplied' in _text(blocks[last - 1]):
+        doomed.add(last - 1)
+
+
 def _mark_trailing(blocks, doomed):
     """Tag lists and stray links left dangling after the last real text."""
     index = len(blocks) - 1
@@ -323,6 +338,7 @@ def strip_boilerplate(soup):
     _mark_cards(blocks, doomed)
     # After the other rules, so a promo already marked above the title doesn't protect what's left.
     _mark_above_title(blocks, doomed)
+    _mark_after_back_to_top(blocks, doomed)
     # Second pass: tag lists can sit just above an author section that has now gone.
     _mark_trailing(blocks, doomed)
     # Footnotes keep their place; furniture just above them still goes.

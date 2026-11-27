@@ -412,7 +412,8 @@ def test_workspace_es_modules_served_and_temporary_script_unpatched(tmp_path):
     server = create_server(tmp_path / "mods.sqlite3", 0, config, auth_enabled=False)
     with running(server) as url:
         with httpx.Client(base_url=url, trust_env=False) as client:
-            assert '<script type="module" src="/reader.js"></script>' in client.get("/").text
+            # The tag carries a ?v= content version so browsers can't run a stale copy.
+            assert re.search(r'<script type="module" src="/reader\.js\?v=[0-9a-f]+"></script>', client.get("/").text)
             for path in modules:
                 resp = client.get(path)
                 assert resp.status_code == 200

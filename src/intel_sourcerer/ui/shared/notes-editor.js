@@ -325,11 +325,25 @@ function checklistBoxItem(event) {
 noteBox.addEventListener("mousedown", (event) => {
   if (checklistBoxItem(event)) event.preventDefault();
 });
+function sparkleChecklistBox(item) {
+  if (!item) return;
+  const rect = item.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) {
+    window.intelMagic?.sparkPoint(rect.left + 8, rect.top + Math.min(12, rect.height / 2), {
+      tone: "emerald",
+      count: 12,
+      spread: 44,
+    });
+  }
+}
 noteBox.addEventListener("click", (event) => {
   const item = checklistBoxItem(event);
   if (!item || busy) return;
   if (item.dataset.checked === "true") delete item.dataset.checked;
-  else item.dataset.checked = "true";
+  else {
+    item.dataset.checked = "true";
+    sparkleChecklistBox(item);
+  }
   noteChanged();
 });
 // Enter copies the item's attributes, and a new task shouldn't start out ticked.
@@ -602,7 +616,10 @@ noteBox.addEventListener("keydown", (event) => {
     if (!item) return;
     event.preventDefault();
     if (item.dataset.checked === "true") delete item.dataset.checked;
-    else item.dataset.checked = "true";
+    else {
+      item.dataset.checked = "true";
+      sparkleChecklistBox(item);
+    }
     noteChanged();
   }
 });
@@ -798,6 +815,7 @@ document.querySelectorAll("[data-notes-copy]").forEach((button) => {
     }
     const prev = button.textContent;
     button.textContent = "Copied ✓";
+    window.intelMagic?.shimmer(button, { tone: "arcane" });
     setTimeout(() => {
       button.textContent = prev;
     }, 1800);

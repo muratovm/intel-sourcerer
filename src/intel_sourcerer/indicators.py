@@ -1,4 +1,5 @@
 """Global indicator pivot directory, lifecycle aging, false-positive ignorelist, and manual IOCs."""
+from .article_links import article_href
 from datetime import datetime, timedelta, timezone
 from html import escape
 from urllib.parse import quote, urlencode
@@ -414,7 +415,7 @@ def render_indicators_page(data, *, options=None, query="", kind="", kev_only=Fa
                 "last": item.get("last_seen", ""),
                 "pivots": [{"label": label, "url": url} for label, url in external_pivots(item["kind"], item["value"])],
                 "articles": [
-                    {"href": "/?" + urlencode({"open": art["url"]}), "title": art["title"],
+                    {"href": article_href(art["url"], art["title"]), "title": art["title"],
                      "publisher": art["publisher"], "date": art["published_at"]}
                     for art in item["articles"]
                 ],
