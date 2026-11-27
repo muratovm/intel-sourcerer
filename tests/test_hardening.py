@@ -255,13 +255,14 @@ def test_library_rows_omits_unselected_article_bodies(tmp_path):
     with closing(connect_database(db_path)) as db, db:
         save_source(db, PublisherSource("s", "Source", "https://example.com", "rss"))
         for idx in (1, 2):
-            art = Article("Source", f"Report {idx}", f"https://example.com/{idx}", str(idx), datetime(2026, 10, idx, tzinfo=timezone.utc), None, None, "<p>sum</p>")
+            art = Article("Source", f"Report {idx}", f"https://example.com/{idx}", str(idx), datetime(2026, 10, idx, tzinfo=timezone.utc), None, None, "<p>" + "summary " * 500 + "</p>")
             save_article(db, "s", art, content=f"Body {idx}", error=None, reason="r", discovered_at="2026-10-01", markdown=f"# Report {idx}", html=f"<p>HTML {idx}</p>")
         rows = {row["url"]: row for row in library_rows(db, selected="https://example.com/1")}
     assert rows["https://example.com/1"]["content_html"] == "<p>HTML 1</p>"
     assert rows["https://example.com/2"]["content_html"] is None
     assert rows["https://example.com/2"]["content_markdown"] is None
-    assert "summary_html" not in rows["https://example.com/1"]
+    # Every row carries a feed summary for its preview line, but only a capped slice of it.
+    assert all(len(row["summary_html"]) <= 1200 for row in rows.values())
 
 
 def test_display_timezone_and_ytdlp_override(monkeypatch, tmp_path):
